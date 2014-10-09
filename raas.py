@@ -49,12 +49,12 @@ class AwsS3(object):
         s3 = boto.connect_s3()
         bucket = s3.create_bucket(self.bucket)
         for f, path in files:
-            #with open(f, 'rb') as f:
-            dest = os.path.join((self.app), path)
-            key = Key(bucket=bucket, name=dest)
-            key.set_contents_from_file(f, replace=True)
-            key.set_acl('public-read')
-            print 'Successfully uploaded to %s:%s' % (bucket, dest)
+            with open(f, 'rb') as f:
+                dest = os.path.join((self.app), path)
+                key = Key(bucket=bucket, name=dest)
+                key.set_contents_from_file(f, replace=True)
+                key.set_acl('public-read')
+                print 'Successfully uploaded to %s:%s' % (bucket, dest)
 
     def walk_dir(self, layer_dir):
         """Walk image directory, returns list of tuples"""

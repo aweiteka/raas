@@ -3,18 +3,28 @@
 import argparse
 import boto
 from boto.s3.key import Key
+import tarfile
+import tempfile
 
 class PulpTar(object):
     def __init__(self, tarfile):
         self.tarfile = tarfile
+        self.tar_tempdir = tempfile.mkdtemp()
 
     @property
     def crane_metadata_file(self):
-        return crane-metadata.json
+        return self.tar_tempdir + "/crane-metadata.json"
 
     @property
     def docker_image_tarfile(self):
         return self.tarfile
+
+    def extract_tar(self):
+        tar = tarfile.open(self.tarfile)
+        tar.extractall(path=self.tar_tempdir)
+        print "Extracted tarfile to %s" % self.tar_tempdir
+        print self.crane_metadata_file
+        tar.close()
 
 class AwsS3(object):
     def __init__(self, bucket, app, image_tar):
@@ -54,8 +64,9 @@ def main():
     args = parser.parse_args()
 
     pulp = PulpTar(args.tarfile)
-    s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_image_tarfile)
-    s3.upload_tar()
+    pulp.extract_tar()
+    #s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_image_tarfile)
+    #s3.upload_tar()
 
 
 if __name__ == '__main__':

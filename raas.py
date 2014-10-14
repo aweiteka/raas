@@ -45,6 +45,7 @@ class AwsS3(object):
         self.bucket = bucket
         self.app = app
         self.images_dir = images_dir
+        self.mask_layers = ['b157b77b1a65e87b4f49298557677048b98fed36043153dcadc28b1295920373']
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -65,6 +66,10 @@ class AwsS3(object):
             # Walk the directory to get all the files to be uploaded
             for dirpath, dirnames, filenames in os.walk(layer_dir):
                 for filename in filenames:
+                    layer_id = dirpath.split('/')
+                    if layer_id[-1] in self.mask_layers:
+                        print "Skipping layer %s" % layer_id[-1]
+                        continue
                     filename = os.path.join(dirpath, filename)
                     files.append((filename, os.path.relpath(filename, layer_dir)))
         else:

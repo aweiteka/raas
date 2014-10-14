@@ -7,6 +7,8 @@ import tarfile
 import tempfile
 import glob
 import os
+import requests
+import json
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -70,6 +72,15 @@ class AwsS3(object):
             files.append((layer_dir, os.path.basename(layer_dir)))
         return files
 
+class Openshift(object):
+    def __init__(self):
+        self.os_url = "https://openshift.com"
+
+    def connect(self):
+        data = json.dumps({'name':'test', 'description':'some test repo'})
+        r = requests.post(self.os_url, data, auth=('user', '*****'))
+        print r.json
+
 def main():
     """Entrypoint for script"""
 
@@ -92,6 +103,9 @@ def main():
     s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir)
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
+
+    #os = Openshift()
+    #os.connect()
 
 
 if __name__ == '__main__':

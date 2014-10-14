@@ -9,6 +9,8 @@ import glob
 import os
 import requests
 import json
+import ConfigParser
+import re
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -41,11 +43,11 @@ class PulpTar(object):
 
 class AwsS3(object):
     """Interactions with AWS S3"""
-    def __init__(self, bucket, app, images_dir):
+    def __init__(self, bucket, app, images_dir, mask_layers):
         self.bucket = bucket
         self.app = app
         self.images_dir = images_dir
-        self.mask_layers = ['b157b77b1a65e87b4f49298557677048b98fed36043153dcadc28b1295920373']
+        self.mask_layers = mask_layers
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -103,9 +105,12 @@ def main():
 
     args = parser.parse_args()
 
+    config = ConfigParser.ConfigParser()
+    config.read('raas.cfg')
+    mask_layers = re.split(',| ', config.get('redhat', 'mask_layers'))
     pulp = PulpTar(args.tarfile)
     pulp.extract_tar()
-    s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir)
+    s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir, mask_layers)
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
 

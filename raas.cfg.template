@@ -13,3 +13,5 @@ server_url = https://openshift.com
 app_url = https://github.com/aweiteka/crane
 # get token from openshift.com or CLI command "rhc authorization list"
 auth_token = asdf1234asdf5678
+user = openshift_username
+pass = password

@@ -104,15 +104,16 @@ class AwsS3(object):
         return files
 
 class Openshift(object):
-    def __init__(self, app_url, openshift_url = "https://openshift.com"):
-        self.openshift_url = openshift_url
-        self.app_url = app_url
+    def __init__(self, **kwargs):
+        self.auth_token = kwargs['auth_token']
+        self.server_url = kwargs['server_url']
+        self.app_url = kwargs['app_url']
 
     def connect(self):
         #data = json.dumps({'name':'test', 'description':'some test repo'})
         #r = requests.post(self.os_url, data, auth=('user', '*****'))
         #print r.json
-        print self.app_url
+        print self.app_url, self.auth_token, self.server_url
 
     def create_app(self):
         # sudo rhc app create -n aweiteka --from-code https://github.com/aweiteka/crane -t python-2.7 -a registry2
@@ -144,10 +145,7 @@ def main():
     s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir, mask_layers)
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
-
-    openshift_url = config.get('openshift', 'server_url')
-    app_url = config.get('openshift', 'app_url')
-    os = Openshift(app_url, openshift_url)
+    os = Openshift(**config._sections['openshift'])
     os.connect()
 
 

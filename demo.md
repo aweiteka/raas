@@ -20,8 +20,8 @@
 1. Show AWS S3 bucket
 1. Show OpenShift application
 1. Show diagram
-1. docker pull <crane_url>/<app_name>
-1. docker run
+1. `docker pull <crane_url>/<app_name>`
+1. `docker run <app_name>`
 
 ## Prep (FIXME: Items to automate)
 1. Update pulp repo redirect URL

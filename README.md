@@ -9,9 +9,11 @@ A prototype docker registry service in the cloud that integrates with Pulp and t
 * OpenShift account
 
 ## Installation
-`pip install -r requirements.txt`
+1. Install Python dependencies: `pip install -r requirements.txt`
+1. Copy config file `cp raas.cfg.template raas.cfg`
 
 ## Configuration
+1. Edit raas.cfg config file
 
 ### AWS S3
 
@@ -24,8 +26,7 @@ aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
 ```
 
 ### OpenShift
-
-TBA
+1. Copy valid token into raas.cfg
 
 ## Using
 

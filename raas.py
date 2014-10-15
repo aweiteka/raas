@@ -32,7 +32,7 @@ class PulpTar(object):
     def get_tarfile(self):
         parts = urlparse.urlsplit(self.tarfile)
         if not parts.scheme or not parts.netloc:
-            print "Using local file %s" self.tarfile
+            print "Using local file %s" % self.tarfile
             self.extract_tar(self.tarfile)
         else:
             from urllib2 import Request, urlopen, URLError
@@ -104,13 +104,19 @@ class AwsS3(object):
         return files
 
 class Openshift(object):
-    def __init__(self):
-        self.os_url = "https://openshift.com"
+    def __init__(self, app_url, openshift_url = "https://openshift.com"):
+        self.openshift_url = openshift_url
+        self.app_url = app_url
 
     def connect(self):
-        data = json.dumps({'name':'test', 'description':'some test repo'})
-        r = requests.post(self.os_url, data, auth=('user', '*****'))
-        print r.json
+        #data = json.dumps({'name':'test', 'description':'some test repo'})
+        #r = requests.post(self.os_url, data, auth=('user', '*****'))
+        #print r.json
+        print self.app_url
+
+    def create_app(self):
+        # sudo rhc app create -n aweiteka --from-code https://github.com/aweiteka/crane -t python-2.7 -a registry2
+        return
 
 def main():
     """Entrypoint for script"""
@@ -139,8 +145,10 @@ def main():
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
 
-    #os = Openshift()
-    #os.connect()
+    openshift_url = config.get('openshift', 'server_url')
+    app_url = config.get('openshift', 'app_url')
+    os = Openshift(app_url, openshift_url)
+    os.connect()
 
 
 if __name__ == '__main__':

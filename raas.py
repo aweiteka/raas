@@ -11,6 +11,7 @@ import requests
 import json
 import ConfigParser
 import re
+import urlparse
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -28,14 +29,37 @@ class PulpTar(object):
             print "More than one metadata file found"
             exit(1)
 
+    def get_tarfile(self):
+        parts = urlparse.urlsplit(self.tarfile)
+        if not parts.scheme or not parts.netloc:
+            print "Using local file %s" self.tarfile
+            self.extract_tar(self.tarfile)
+        else:
+            from urllib2 import Request, urlopen, URLError
+            req = Request(self.tarfile)
+            try:
+                response = urlopen(req)
+            except URLError as e:
+                if hasattr(e, 'reason'):
+                    print 'We failed to reach a server.'
+                    print 'Reason: ', e.reason
+                elif hasattr(e, 'code'):
+                    print 'The server couldn\'t fulfill the request.'
+                    print 'Error code: ', e.code
+            else:
+                raw_tarfile = tempfile.NamedTemporaryFile(mode='wb', suffix='.tar')
+                raw_tarfile.write(response.read())
+                print "Write file %s from URL" % raw_tarfile.name
+                self.extract_tar(raw_tarfile.name)
+
     @property
     def docker_images_dir(self):
         """Temp dir of docker images"""
         return self.tar_tempdir + "/web"
 
-    def extract_tar(self):
+    def extract_tar(self, image_tarfile):
         """Extract tarfile into temp dir"""
-        tar = tarfile.open(self.tarfile)
+        tar = tarfile.open(image_tarfile)
         tar.extractall(path=self.tar_tempdir)
         print "Extracted tarfile to %s" % self.tar_tempdir
         print self.crane_metadata_file
@@ -99,8 +123,8 @@ def main():
                        metavar='APPLICATION_NAME',
                        help='Name of the application being uploaded, i.e. myapp')
     parser.add_argument('tarfile',
-                       metavar='MYAPP.TAR',
-                       help='Name of the tarfile being uploaded')
+                       metavar='MYAPP.TAR or https://pulp-server.example.com/pulp/static/myapp.tar',
+                       help='Local file or URL of Pulp export being uploaded')
 
 
     args = parser.parse_args()
@@ -110,7 +134,7 @@ def main():
     mask_layers = config.get('redhat', 'mask_layers')
     mask_layers = re.split(',| |\n', mask_layers.strip())
     pulp = PulpTar(args.tarfile)
-    pulp.extract_tar()
+    pulp.get_tarfile()
     s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir, mask_layers)
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)

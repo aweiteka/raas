@@ -28,5 +28,3 @@
    ```pulp-admin docker repo update --repo-id acme-app --redirect-url https://s3.amazonaws.com/acmecorp.bucket/acme-app/```
 1. Export tar file
    ```pulp-admin docker repo export run --repo-id acme-app --export-file /var/lib/pulp/static/acme-app.tar```
-1. Get tar file
-   ```curl -O https://pulp-server.example.com/pulp/static/acme-app.tar -k```

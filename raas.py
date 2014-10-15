@@ -107,7 +107,8 @@ def main():
 
     config = ConfigParser.ConfigParser()
     config.read('raas.cfg')
-    mask_layers = re.split(',| ', config.get('redhat', 'mask_layers'))
+    mask_layers = config.get('redhat', 'mask_layers')
+    mask_layers = re.split(',| |\n', mask_layers.strip())
     pulp = PulpTar(args.tarfile)
     pulp.extract_tar()
     s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir, mask_layers)

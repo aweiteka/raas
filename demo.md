@@ -22,3 +22,11 @@
 1. Show diagram
 1. docker pull <crane_url>/<app_name>
 1. docker run
+
+## Prep (FIXME: Items to automate)
+1. Update pulp repo redirect URL
+   ```pulp-admin docker repo update --repo-id acme-app --redirect-url https://s3.amazonaws.com/acmecorp.bucket/acme-app/```
+1. Export tar file
+   ```pulp-admin docker repo export run --repo-id acme-app --export-file /var/lib/pulp/static/acme-app.tar```
+1. Get tar file
+   ```curl -O https://pulp-server.example.com/pulp/static/acme-app.tar -k```

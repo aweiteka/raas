@@ -9,9 +9,11 @@ mask_layers =
     e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
 
 [openshift]
-server_url = https://openshift.com
-app_url = https://github.com/aweiteka/crane
+server_url = https://openshift.redhat.com
+app_git_url = https://github.com/aweiteka/crane
 # get token from openshift.com or CLI command "rhc authorization list"
 auth_token = asdf1234asdf5678
-user = openshift_username
-pass = password
+username = openshift_username
+password = password
+domain = mydomain
+cartridge = python-2.7

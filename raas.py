@@ -12,6 +12,7 @@ import json
 import ConfigParser
 import re
 import urlparse
+import base64
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -30,6 +31,7 @@ class PulpTar(object):
             exit(1)
 
     def get_tarfile(self):
+        """Get a tarfile plus json metadata from url or local file"""
         parts = urlparse.urlsplit(self.tarfile)
         if not parts.scheme or not parts.netloc:
             print "Using local file %s" % self.tarfile
@@ -104,20 +106,37 @@ class AwsS3(object):
         return files
 
 class Openshift(object):
+    """Interact with Openshift REST API"""
     def __init__(self, **kwargs):
+        # auth_token supported?
         self.auth_token = kwargs['auth_token']
+        self.username = kwargs['username']
+        self.password = kwargs['password']
         self.server_url = kwargs['server_url']
-        self.app_url = kwargs['app_url']
+        self.app_git_url = kwargs['app_git_url']
+        self.domain = kwargs['domain']
+        self.cartridge = kwargs['cartridge']
+        #FIXME:
+        self.app_name = "reg"
 
-    def connect(self):
-        #data = json.dumps({'name':'test', 'description':'some test repo'})
-        #r = requests.post(self.os_url, data, auth=('user', '*****'))
-        #print r.json
-        print self.app_url, self.auth_token, self.server_url
+    @property
+    def credentials(self):
+        return base64.encodestring('%s:%s' % (self.username, self.password))[:-1]
+
+    @property
+    def session(self):
+        s = requests.Session()
+        #s.auth = (self.credentials)
+        return s
 
     def create_app(self):
-        # sudo rhc app create -n aweiteka --from-code https://github.com/aweiteka/crane -t python-2.7 -a registry2
-        return
+        """Create an Openshift application"""
+        payload = {"name": self.app_name,
+                   "cartridge": self.cartridge,
+                   "initial_git_url": self.app_git_url}
+        url = self.server_url + "/broker/rest/domains/" + self.domain + "/applications"
+        r = requests.post(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password), data=payload)
+        print r.text
 
 def main():
     """Entrypoint for script"""
@@ -150,7 +169,7 @@ def main():
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
     os = Openshift(**config._sections['openshift'])
-    os.connect()
+    os.create_app()
 
 
 if __name__ == '__main__':

@@ -67,11 +67,11 @@ class PulpTar(object):
 
 class AwsS3(object):
     """Interactions with AWS S3"""
-    def __init__(self, bucket, app, images_dir, mask_layers):
-        self.bucket = bucket
-        self.app = app
-        self.images_dir = images_dir
-        self.mask_layers = mask_layers
+    def __init__(self, **kwargs):
+        self.bucket = kwargs['bucket_name']
+        self.app = kwargs['app_name']
+        self.images_dir = kwargs['images_dir']
+        self.mask_layers = kwargs['mask_layers']
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -142,7 +142,11 @@ def main():
     mask_layers = re.split(',| |\n', mask_layers.strip())
     pulp = PulpTar(args.tarfile)
     pulp.get_tarfile()
-    s3 = AwsS3(args.bucket_name, args.app_name, pulp.docker_images_dir, mask_layers)
+    kwargs = {"bucket_name": args.bucket_name,
+              "app_name": args.app_name,
+              "images_dir": pulp.docker_images_dir,
+              "mask_layers": mask_layers}
+    s3 = AwsS3(**kwargs)
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
     os = Openshift(**config._sections['openshift'])

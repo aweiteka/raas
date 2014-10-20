@@ -40,6 +40,7 @@ class PulpTar(object):
             from urllib2 import Request, urlopen, URLError
             req = Request(self.tarfile)
             try:
+                print "Fetching file via URL %s" %  self.tarfile
                 response = urlopen(req)
             except URLError as e:
                 if hasattr(e, 'reason'):
@@ -79,6 +80,8 @@ class AwsS3(object):
         """Upload image layers to S3 bucket"""
         s3 = boto.connect_s3()
         bucket = s3.create_bucket(self.bucket)
+        print "Created S3 bucket %s" % self.bucket
+        print "Uploading image layers to S3"
         for f, path in files:
             with open(f, 'rb') as f:
                 dest = os.path.join((self.app), path)
@@ -117,26 +120,57 @@ class Openshift(object):
         self.domain = kwargs['domain']
         self.cartridge = kwargs['cartridge']
         #FIXME:
-        self.app_name = "reg"
+        self.app_name = "registry"
+        self.app_data = None
+        #self.cranefile = cranefile
 
     @property
     def credentials(self):
         return base64.encodestring('%s:%s' % (self.username, self.password))[:-1]
 
     @property
-    def session(self):
-        s = requests.Session()
-        #s.auth = (self.credentials)
-        return s
+    def env_vars(self):
+        return [("OPENSHIFT_PYTHON_WSGI_APPLICATION", "crane/wsgi.py"), ("OPENSHIFT_PYTHON_DOCUMENT_ROOT", "crane/")]
+
+    def call_openshift(self, url, req_type="get", payload=None):
+        if req_type in "get":
+            r = requests.get(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password))
+        else:
+            r = requests.post(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password), data=payload)
+        return r
 
     def create_app(self):
         """Create an Openshift application"""
         payload = {"name": self.app_name,
                    "cartridge": self.cartridge,
+                   #"scale": True,
                    "initial_git_url": self.app_git_url}
         url = self.server_url + "/broker/rest/domains/" + self.domain + "/applications"
-        r = requests.post(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password), data=payload)
-        print r.text
+        print "Creating OpenShift application"
+        r = self.call_openshift(url, "post", payload)
+        print "Created app %s" % self.app_name
+        #self.app_id = r.text['data']['id']
+        text = r.json()
+        #print json.dumps(r.json(), indent=4)
+        self.app_data = text['data']
+        self.set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
+        self.restart_app()
+
+    def set_env_vars(self, url):
+        for var in self.env_vars:
+            payload = {"name": var[0],
+                       "value": var[1]}
+            r = self.call_openshift(url, "post", payload)
+            print "Setting environment variable %s" % var[0]
+
+    def restart_app(self):
+        payload = {"event": "restart"}
+        r = self.call_openshift(self.app_data['links']['RESTART']['href'], "post", payload)
+        print "restarting application"
+
+    def update_git_repo(self):
+        #git clone self.app_git_url
+        #cp self.cranefile
 
 def main():
     """Entrypoint for script"""
@@ -168,6 +202,7 @@ def main():
     s3 = AwsS3(**kwargs)
     files = s3.walk_dir(pulp.docker_images_dir)
     s3.upload_layers(files)
+    #cranefile = pulp.crane_metadata_file
     os = Openshift(**config._sections['openshift'])
     os.create_app()
 

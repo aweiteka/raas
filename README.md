@@ -6,18 +6,46 @@ A prototype docker registry service in the cloud that integrates with Pulp and t
 
 * Python 2.6 or 2.7
 * AWS S3 account
-* OpenShift account
+* OpenShift account, create domain
 
 ## Installation
 1. Install Python dependencies: `pip install -r requirements.txt`
 1. Copy config file `cp raas.cfg.template raas.cfg`
 
 ## Configuration
+1. Rename configuration file
+
+```
+cp raas.cfg.template raas.cfg
+```
+
 1. Edit raas.cfg config file
+
+```
+[redhat]
+# layers on that should NOT be uploaded to cloud storage
+# intended for Red Hat image layers that are hosted on RH CDN
+# comma-, space- or line-separated IDs that match tarball IDs
+mask_layers =
+    8dc6a04270dfb41460bd53968e31b14da5414501c935fb67cf25975af9066925
+    dbb4ad53beb6972d3639a16b4505d06d37695a8a494158d564742c24d94c1067
+    bef54b8f8a2fdd221734f1da404d4c0a7d07ee9169b1443a338ab54236c8c91a
+    e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
+
+[openshift]
+server_url = https://openshift.redhat.com
+app_git_url = https://github.com/aweiteka/crane
+# get token from openshift.com or CLI command "rhc authorization list"
+auth_token = asdf1234asdf5678
+username = openshift_username
+password = password
+domain = mydomain
+cartridge = python-2.7
+```
 
 ### AWS S3
 
-Assumes an AWS account. Create credentials file `~/.aws/credentials` with the following values:
+Assumes an AWS account. Boto API uses local configuration. Create credentials file `~/.aws/credentials` with the following values:
 
 ```
 [default]
@@ -26,25 +54,44 @@ aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
 ```
 
 ### OpenShift
+1. Edit credentials in configuration file
 1. Copy valid token into raas.cfg
+1. Edit the domain name
 
 ## Using
 
 ```
-$ ./raas.py acme.bucket myappname path/to/myapp.tar
-Extracted tarfile to /tmp/tmpczrXfS
-/tmp/tmpczrXfS/layer-test.json
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/b157b77b1a65e87b4f49298557677048b98fed36043153dcadc28b1295920373/layer
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/b157b77b1a65e87b4f49298557677048b98fed36043153dcadc28b1295920373/json
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/b157b77b1a65e87b4f49298557677048b98fed36043153dcadc28b1295920373/ancestry
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/511136ea3c5a64f264b78b5433614aec563103b4d4702f3ba7d4d2698e22c158/layer
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/511136ea3c5a64f264b78b5433614aec563103b4d4702f3ba7d4d2698e22c158/json
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/511136ea3c5a64f264b78b5433614aec563103b4d4702f3ba7d4d2698e22c158/ancestry
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/47d565d7907301d28d8a059da006e0ec100a569c0b0442ab98daf65279a6af68/layer
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/47d565d7907301d28d8a059da006e0ec100a569c0b0442ab98daf65279a6af68/json
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/47d565d7907301d28d8a059da006e0ec100a569c0b0442ab98daf65279a6af68/ancestry
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/34e94e67e63a0f079d9336b3c2a52e814d138e5b3f1f614a0cfe273814ed7c0a/layer
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/34e94e67e63a0f079d9336b3c2a52e814d138e5b3f1f614a0cfe273814ed7c0a/json
-Successfully uploaded to <Bucket: acmecorp.bucket>:acme-app/34e94e67e63a0f079d9336b3c2a52e814d138e5b3f1f614a0cfe273814ed7c0a/ancestry
+$ ./raas.py bigdatainc.bucket bigdata-app https://pulp-server.example.com/pulp/static/bigdata-app.tar
+Using local file bigdata-app.tar
+Extracted tarfile to /tmp/tmpgDuAh6
+/tmp/tmpgDuAh6/bigdata-app.json
+Skipping layer e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
+Skipping layer e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
+Skipping layer e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
+Created S3 bucket bigdatainc.bucket
+Uploading image layers to S3
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/bf3bf3a4371d50acc13a8774e5cd3d9e2ebc4818252893043f93397d69e0ada8/layer
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/bf3bf3a4371d50acc13a8774e5cd3d9e2ebc4818252893043f93397d69e0ada8/json
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/bf3bf3a4371d50acc13a8774e5cd3d9e2ebc4818252893043f93397d69e0ada8/ancestry
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/9f87f5b67e6a56ba461cee756b88401b0584d21947b442eb3cc4638edd65c6c2/layer
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/9f87f5b67e6a56ba461cee756b88401b0584d21947b442eb3cc4638edd65c6c2/json
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/9f87f5b67e6a56ba461cee756b88401b0584d21947b442eb3cc4638edd65c6c2/ancestry
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/769aa15f7c47c8f6ed1b09615ff3d26943492de2b2c588898ddb5e62d1675c49/layer
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/769aa15f7c47c8f6ed1b09615ff3d26943492de2b2c588898ddb5e62d1675c49/json
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/769aa15f7c47c8f6ed1b09615ff3d26943492de2b2c588898ddb5e62d1675c49/ancestry
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/6691d2df8395e6ad20fb3c1acaefeddd4c6eebf8724909aea79927e2f1614b26/layer
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/6691d2df8395e6ad20fb3c1acaefeddd4c6eebf8724909aea79927e2f1614b26/json
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/6691d2df8395e6ad20fb3c1acaefeddd4c6eebf8724909aea79927e2f1614b26/ancestry
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/661e33d746676c865b7f19f931f61ebe1f3c1092cfc76644332c427acda6972c/layer
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/661e33d746676c865b7f19f931f61ebe1f3c1092cfc76644332c427acda6972c/json
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/661e33d746676c865b7f19f931f61ebe1f3c1092cfc76644332c427acda6972c/ancestry
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/2d723127d3c6301b9d9316eea45e6a379ebd941c795e52865e32954ddb0a8a1d/layer
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/2d723127d3c6301b9d9316eea45e6a379ebd941c795e52865e32954ddb0a8a1d/json
+Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/2d723127d3c6301b9d9316eea45e6a379ebd941c795e52865e32954ddb0a8a1d/ancestry
+Creating OpenShift application
+Created app registry
+Setting environment variable OPENSHIFT_PYTHON_WSGI_APPLICATION
+Setting environment variable OPENSHIFT_PYTHON_DOCUMENT_ROOT
+restarting application
 
 ```

@@ -52,3 +52,6 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Real config file
+raas.cfg

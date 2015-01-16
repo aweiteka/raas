@@ -171,6 +171,7 @@ class Openshift(object):
     def update_git_repo(self):
         #git clone self.app_git_url
         #cp self.cranefile
+        return
 
 def main():
     """Entrypoint for script"""

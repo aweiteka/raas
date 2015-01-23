@@ -64,9 +64,11 @@ Instead of running on a dedicated host, the raas tool is intended to be run as a
               -e RAAS_CONF_REPO="ssh://user@git.example.com:22/private-raas-config" \
               -e AWS_ACCESS_KEY_ID=<changeme> \
               -e AWS_SECRET_ACCESS_KEY=<changeme> \
-              -v ~/.ssh:/root/.ssh \
+              -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
+              -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
               aweiteka/raas
 ```
+This provides access to `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` and add your username for the `rhc` client to work.
 
 ## Basic Idea
 

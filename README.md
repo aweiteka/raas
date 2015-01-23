@@ -55,16 +55,15 @@ aws_access_key_id = YOUR_ACCESS_KEY_ID
 aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
 ```
 
-### OpenShift
-1. Edit credentials in configuration file
+## Basic Idea
 
 
 ![Alt text](images/federated_registry.png "Registry as a Service")
 
-## Using
+## In Use
 
 ```
-$ ./raas.py bigdatainc.bucket bigdata-app https://pulp-server.example.com/pulp/static/bigdata-app.tar
+$ ./raas.py bigdatainc bigdata-app
 Using local file bigdata-app.tar
 Extracted tarfile to /tmp/tmpgDuAh6
 /tmp/tmpgDuAh6/bigdata-app.json

@@ -13,6 +13,7 @@ import ConfigParser
 import re
 import urlparse
 import base64
+import git
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -91,7 +92,7 @@ class AwsS3(object):
                 print 'Successfully uploaded to %s:%s' % (bucket, dest)
 
     def walk_dir(self, layer_dir):
-        """Walk image directory, returns list of tuples"""
+        """Walk image directory, return list of tuples"""
         files = []
         if os.path.isdir(layer_dir):
             # Walk the directory to get all the files to be uploaded
@@ -130,6 +131,7 @@ class Openshift(object):
 
     @property
     def env_vars(self):
+        """required environment variables to make crane work on openshift"""
         return [("OPENSHIFT_PYTHON_WSGI_APPLICATION", "crane/wsgi.py"), ("OPENSHIFT_PYTHON_DOCUMENT_ROOT", "crane/")]
 
     def call_openshift(self, url, req_type="get", payload=None):
@@ -168,44 +170,80 @@ class Openshift(object):
         r = self.call_openshift(self.app_data['links']['RESTART']['href'], "post", payload)
         print "restarting application"
 
-    def update_git_repo(self):
-        #git clone self.app_git_url
-        #cp self.cranefile
-        return
+
+class Configuration(object):
+    """Configuration and utilities"""
+
+    def __init__(self, repo_url):
+        self.config_repo = self.git_clone(repo_url)
+        self.index = None
+
+    def git_clone(self, repo_url, directory=None):
+        """Clone using GitPython"""
+        return Repo.clone_from(repo_url, self.conf_dir)
+
+    def git_add(self, files):
+        self.index = self.config_repo.index
+        self.index.add(files)
+
+    def git_commit(self, message):
+        self.index.commit(message)
+
+    def git_push(self):
+        origin = self.config_repo.remotes.origin
+        return origin.push()
+
+    @property
+    def conf_dir(self):
+        return tempfile.mkdtemp()
+
+    @property
+    def conf(self):
+        conf = ConfigParser.ConfigParser()
+        return conf.read('%s/raas.cfg' % self.conf_dir)
+
 
 def main():
     """Entrypoint for script"""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('bucket_name',
-                       metavar='MY_BUCKET_NAME',
-                       help='Name of the AWS S3 bucket, i.e. isv.images')
-    parser.add_argument('app_name',
-                       metavar='APPLICATION_NAME',
-                       help='Name of the application being uploaded, i.e. myapp')
-    parser.add_argument('tarfile',
-                       metavar='MYAPP.TAR or https://pulp-server.example.com/pulp/static/myapp.tar',
-                       help='Local file or URL of Pulp export being uploaded')
-
+    subparsers = parser.add_subparsers(help='sub-command help', dest='action')
+    validate_parser = subparsers.add_parser('validate', help='Validate configuration')
+    setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
+    push_parser = subparsers.add_parser('push', help='Push or update and image')
+    push_parser.add_argument('image',
+                             metavar='IMAGE',
+                             help='Image name')
 
     args = parser.parse_args()
 
-    config = ConfigParser.ConfigParser()
-    config.read('raas.cfg')
-    mask_layers = config.get('redhat', 'mask_layers')
-    mask_layers = re.split(',| |\n', mask_layers.strip())
-    pulp = PulpTar(args.tarfile)
-    pulp.get_tarfile()
-    kwargs = {"bucket_name": args.bucket_name,
-              "app_name": args.app_name,
-              "images_dir": pulp.docker_images_dir,
-              "mask_layers": mask_layers}
-    s3 = AwsS3(**kwargs)
-    files = s3.walk_dir(pulp.docker_images_dir)
-    s3.upload_layers(files)
-    #cranefile = pulp.crane_metadata_file
-    os = Openshift(**config._sections['openshift'])
-    os.create_app()
+    # TODO: use env var RAAS_CONF_REPO
+    isv = Configuration(os.getenv("RAAS_CONF_REPO"))
+    print isv.conf
+
+    if args.action in "validate":
+        print "validate"
+        quit()
+    elif args.action in "setup":
+        print "setup"
+        quit()
+    elif args.action in "push":
+        print "push", args.image
+        #mask_layers = conf.get('redhat', 'mask_layers')
+        #mask_layers = re.split(',| |\n', mask_layers.strip())
+        #pulp = PulpTar(args.tarfile)
+        #pulp.get_tarfile()
+        #cranefile = pulp.crane_metadata_file
+        #kwargs = {"bucket_name": args.bucket_name,
+        #          "app_name": args.app_name,
+        #          "images_dir": pulp.docker_images_dir,
+        #          "mask_layers": mask_layers}
+        #s3 = AwsS3(**kwargs)
+        #files = s3.walk_dir(pulp.docker_images_dir)
+        #s3.upload_layers(files)
+        #os = Openshift(**conf._sections['openshift'])
+        #os.create_app()
+        quit()
 
 
 if __name__ == '__main__':

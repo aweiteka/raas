@@ -55,6 +55,19 @@ aws_access_key_id = YOUR_ACCESS_KEY_ID
 aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
 ```
 
+## Running as container
+
+Instead of running on a dedicated host, the raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to push and troubleshoot without workstation dependencies.
+
+```
+[sudo] docker run -it --rm \
+              -e RAAS_CONF_REPO="ssh://user@git.example.com:22/private-raas-config" \
+              -e AWS_ACCESS_KEY_ID=<changeme> \
+              -e AWS_SECRET_ACCESS_KEY=<changeme> \
+              -v ~/.ssh:/root/.ssh \
+              aweiteka/raas
+```
+
 ## Basic Idea
 
 

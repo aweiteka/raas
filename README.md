@@ -7,19 +7,21 @@ A prototype docker registry service in the cloud that integrates with Pulp and t
 * Python 2.6 or 2.7
 * AWS S3 account
 * OpenShift account, create domain
+* Private repository of credentials and other configuration
 
 ## Installation
 1. Install Python dependencies: `pip install -r requirements.txt`
 1. Copy config file `cp raas.cfg.template raas.cfg`
+1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
 
 ## Configuration
-1. Rename configuration file
+1. Copy the common configuration file
 
 ```
 cp raas.cfg.template raas.cfg
 ```
 
-1. Edit raas.cfg config file
+1. Edit raas.cfg config file, commit and push to private repository
 
 ```
 [redhat]
@@ -55,8 +57,9 @@ aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
 
 ### OpenShift
 1. Edit credentials in configuration file
-1. Copy valid token into raas.cfg
-1. Edit the domain name
+
+
+![Alt text](images/federated_registry.png "Registry as a Service")
 
 ## Using
 
@@ -95,3 +98,41 @@ Setting environment variable OPENSHIFT_PYTHON_DOCUMENT_ROOT
 restarting application
 
 ```
+
+# Workflow
+
+## Primary commands
+
+### New setup
+
+Prerequisite: create OpenShift domain, ensure S3 bucket setup with read+write access.
+
+```
+raas setup <isv>
+```
+
+Validates openshift domain, validates AWS S3 bucket access, gets target crane release tar, creates gear, validates registry at `/v1/_ping`
+
+### Push or update image
+
+```
+raas push <isv> <image>
+```
+
+Clones deployed openshift crane repo, gets image from pulp, pushes ISV layers to S3, gets RH metadata files, adds ISV metadata, git commit, git push, backs up ISV metadata to config repo, git commit, git push
+
+### Validate images
+
+```
+raas validate <isv>
+```
+
+Check domain is present, check S3 bucket is present, clone deployed openshift crane repo, get deployed image list, pull S3 image list, validate lists match, ping `/v1/_ping`, run linter on json metadata files
+
+## Troubleshooting
+
+Use standard tools for troubleshooting
+
+* `aws s3 ...`
+* `rhc ...`
+* `git commit|push ...`

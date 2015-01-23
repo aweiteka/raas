@@ -208,7 +208,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
-    validate_parser = subparsers.add_parser('validate', help='Validate configuration')
+    status_parser = subparsers.add_parser('status', help='Check configuration status')
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
     push_parser = subparsers.add_parser('push', help='Push or update and image')
     push_parser.add_argument('image',
@@ -221,8 +221,8 @@ def main():
     isv = Configuration(os.getenv("RAAS_CONF_REPO"))
     print isv.conf
 
-    if args.action in "validate":
-        print "validate"
+    if args.action in "status":
+        print "status"
         quit()
     elif args.action in "setup":
         print "setup"

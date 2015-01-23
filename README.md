@@ -110,7 +110,11 @@ Prerequisite: create OpenShift domain, ensure S3 bucket setup with read+write ac
 raas setup <isv>
 ```
 
-Validates openshift domain, validates AWS S3 bucket access, gets target crane release tar, creates gear, validates registry at `/v1/_ping`
+* Validate openshift domain
+* validate AWS S3 bucket access
+* get target crane release tar, init git repo with openshift online remote
+* create gear
+* validate registry at `/v1/_ping`
 
 ### Push or update image
 
@@ -118,15 +122,28 @@ Validates openshift domain, validates AWS S3 bucket access, gets target crane re
 raas push <isv> <image>
 ```
 
-Clones deployed openshift crane repo, gets image from pulp, pushes ISV layers to S3, gets RH metadata files, adds ISV metadata, git commit, git push, backs up ISV metadata to config repo, git commit, git push
+* Clone deployed openshift crane repo
+* get image from pulp
+* push ISV layers to S3
+* get RH metadata files
+* add ISV metadata
+* git commit, git push to OpenShift
+* backup ISV metadata to config repo, git commit, git push config repo
 
-### Validate images
+### Status
 
 ```
-raas validate <isv>
+raas status <isv>
 ```
 
-Check domain is present, check S3 bucket is present, clone deployed openshift crane repo, get deployed image list, pull S3 image list, validate lists match, ping `/v1/_ping`, run linter on json metadata files
+* Check domain is present
+* check S3 bucket is present
+* clone deployed openshift crane repo `rhc clone ...`
+* get deployed image list
+* pull S3 image list
+* validate lists match
+* check crane registry API `/v1/_ping`
+* run linter on json metadata files
 
 ## Troubleshooting
 

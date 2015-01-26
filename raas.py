@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 
 import base64
-import json
+#import json
 import os
-import re
+#import re
 import requests
 import tarfile
 
@@ -16,11 +16,17 @@ from glob import glob
 from tempfile import mkdtemp, NamedTemporaryFile
 from urlparse import urlsplit
 
+
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
     def __init__(self, tarfile):
         self.tarfile = tarfile
         self.tar_tempdir = mkdtemp()
+
+    @property
+    def docker_images_dir(self):
+        """Temp dir of docker images"""
+        return self.tar_tempdir + "/web"
 
     @property
     def crane_metadata_file(self):
@@ -31,6 +37,14 @@ class PulpTar(object):
         else:
             print "More than one metadata file found"
             exit(1)
+
+    def extract_tar(self, image_tarfile):
+        """Extract tarfile into temp dir"""
+        tar = tarfile.open(image_tarfile)
+        tar.extractall(path=self.tar_tempdir)
+        print "Extracted tarfile to %s" % self.tar_tempdir
+        print self.crane_metadata_file
+        tar.close()
 
     def get_tarfile(self):
         """Get a tarfile plus json metadata from url or local file"""
@@ -57,18 +71,6 @@ class PulpTar(object):
                 print "Write file %s from URL" % raw_tarfile.name
                 self.extract_tar(raw_tarfile.name)
 
-    @property
-    def docker_images_dir(self):
-        """Temp dir of docker images"""
-        return self.tar_tempdir + "/web"
-
-    def extract_tar(self, image_tarfile):
-        """Extract tarfile into temp dir"""
-        tar = tarfile.open(image_tarfile)
-        tar.extractall(path=self.tar_tempdir)
-        print "Extracted tarfile to %s" % self.tar_tempdir
-        print self.crane_metadata_file
-        tar.close()
 
 class AwsS3(object):
     """Interactions with AWS S3"""
@@ -97,7 +99,7 @@ class AwsS3(object):
         files = []
         if os.path.isdir(layer_dir):
             # Walk the directory to get all the files to be uploaded
-            for dirpath, dirnames, filenames in os.walk(layer_dir):
+            for dirpath, _, filenames in os.walk(layer_dir):
                 for filename in filenames:
                     layer_id = dirpath.split('/')
                     if layer_id[-1] in self.mask_layers:
@@ -110,6 +112,7 @@ class AwsS3(object):
             files.append((layer_dir, os.path.basename(layer_dir)))
         return files
 
+
 class Openshift(object):
     """Interact with Openshift REST API"""
     def __init__(self, **kwargs):
@@ -121,7 +124,7 @@ class Openshift(object):
         self.app_git_url = kwargs['app_git_url']
         self.domain = kwargs['domain']
         self.cartridge = kwargs['cartridge']
-        #FIXME:
+        # FIXME:
         self.app_name = "registry"
         self.app_data = None
         #self.cranefile = cranefile
@@ -132,7 +135,7 @@ class Openshift(object):
 
     @property
     def env_vars(self):
-        """required environment variables to make crane work on openshift"""
+        """Required environment variables to make crane work on openshift"""
         return [("OPENSHIFT_PYTHON_WSGI_APPLICATION", "crane/wsgi.py"), ("OPENSHIFT_PYTHON_DOCUMENT_ROOT", "crane/")]
 
     def call_openshift(self, url, req_type="get", payload=None):
@@ -141,6 +144,18 @@ class Openshift(object):
         else:
             r = requests.post(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password), data=payload)
         return r
+
+    def restart_app(self):
+        payload = {"event": "restart"}
+        self.call_openshift(self.app_data['links']['RESTART']['href'], "post", payload)
+        print "Restarting application"
+
+    def set_env_vars(self, url):
+        for var in self.env_vars:
+            payload = {"name": var[0],
+                       "value": var[1]}
+            self.call_openshift(url, "post", payload)
+            print "Setting environment variable %s" % var[0]
 
     def create_app(self):
         """Create an Openshift application"""
@@ -159,25 +174,21 @@ class Openshift(object):
         self.set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
         self.restart_app()
 
-    def set_env_vars(self, url):
-        for var in self.env_vars:
-            payload = {"name": var[0],
-                       "value": var[1]}
-            r = self.call_openshift(url, "post", payload)
-            print "Setting environment variable %s" % var[0]
-
-    def restart_app(self):
-        payload = {"event": "restart"}
-        r = self.call_openshift(self.app_data['links']['RESTART']['href'], "post", payload)
-        print "restarting application"
-
 
 class Configuration(object):
     """Configuration and utilities"""
-
     def __init__(self, repo_url):
         self.config_repo = self.git_clone(repo_url)
         self.index = None
+
+    @property
+    def conf_dir(self):
+        return mkdtemp()
+
+    @property
+    def conf(self):
+        conf = ConfigParser()
+        return conf.read('%s/raas.cfg' % self.conf_dir)
 
     def git_clone(self, repo_url, directory=None):
         """Clone using GitPython"""
@@ -194,28 +205,15 @@ class Configuration(object):
         origin = self.config_repo.remotes.origin
         return origin.push()
 
-    @property
-    def conf_dir(self):
-        return mkdtemp()
-
-    @property
-    def conf(self):
-        conf = ConfigParser()
-        return conf.read('%s/raas.cfg' % self.conf_dir)
-
 
 def main():
     """Entrypoint for script"""
-
     parser = ArgumentParser()
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
-    status_parser = subparsers.add_parser('status', help='Check configuration status')
-    setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
+    subparsers.add_parser('status', help='Check configuration status')
+    subparsers.add_parser('setup', help='Setup initial configuration')
     push_parser = subparsers.add_parser('push', help='Push or update and image')
-    push_parser.add_argument('image',
-                             metavar='IMAGE',
-                             help='Image name')
-
+    push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
     # TODO: use env var RAAS_CONF_REPO
@@ -249,4 +247,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

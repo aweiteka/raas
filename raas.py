@@ -1,30 +1,31 @@
 #!/usr/bin/env python
 
-import argparse
-import boto
-from boto.s3.key import Key
-import tarfile
-import tempfile
-import glob
-import os
-import requests
-import json
-import ConfigParser
-import re
-import urlparse
 import base64
-import git
+import json
+import os
+import re
+import requests
+import tarfile
+
+from argparse import ArgumentParser
+from boto import connect_s3
+from boto.s3.key import Key
+from ConfigParser import ConfigParser
+from git import Repo
+from glob import glob
+from tempfile import mkdtemp, NamedTemporaryFile
+from urlparse import urlsplit
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
     def __init__(self, tarfile):
         self.tarfile = tarfile
-        self.tar_tempdir = tempfile.mkdtemp()
+        self.tar_tempdir = mkdtemp()
 
     @property
     def crane_metadata_file(self):
         """Full path to crane metadata file"""
-        json_files = glob.glob(self.tar_tempdir + "/*.json")
+        json_files = glob(self.tar_tempdir + "/*.json")
         if len(json_files) == 1:
             return json_files[0]
         else:
@@ -33,7 +34,7 @@ class PulpTar(object):
 
     def get_tarfile(self):
         """Get a tarfile plus json metadata from url or local file"""
-        parts = urlparse.urlsplit(self.tarfile)
+        parts = urlsplit(self.tarfile)
         if not parts.scheme or not parts.netloc:
             print "Using local file %s" % self.tarfile
             self.extract_tar(self.tarfile)
@@ -41,7 +42,7 @@ class PulpTar(object):
             from urllib2 import Request, urlopen, URLError
             req = Request(self.tarfile)
             try:
-                print "Fetching file via URL %s" %  self.tarfile
+                print "Fetching file via URL %s" % self.tarfile
                 response = urlopen(req)
             except URLError as e:
                 if hasattr(e, 'reason'):
@@ -51,7 +52,7 @@ class PulpTar(object):
                     print 'The server couldn\'t fulfill the request.'
                     print 'Error code: ', e.code
             else:
-                raw_tarfile = tempfile.NamedTemporaryFile(mode='wb', suffix='.tar')
+                raw_tarfile = NamedTemporaryFile(mode='wb', suffix='.tar')
                 raw_tarfile.write(response.read())
                 print "Write file %s from URL" % raw_tarfile.name
                 self.extract_tar(raw_tarfile.name)
@@ -79,7 +80,7 @@ class AwsS3(object):
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
-        s3 = boto.connect_s3()
+        s3 = connect_s3()
         bucket = s3.create_bucket(self.bucket)
         print "Created S3 bucket %s" % self.bucket
         print "Uploading image layers to S3"
@@ -195,18 +196,18 @@ class Configuration(object):
 
     @property
     def conf_dir(self):
-        return tempfile.mkdtemp()
+        return mkdtemp()
 
     @property
     def conf(self):
-        conf = ConfigParser.ConfigParser()
+        conf = ConfigParser()
         return conf.read('%s/raas.cfg' % self.conf_dir)
 
 
 def main():
     """Entrypoint for script"""
 
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')

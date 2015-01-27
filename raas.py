@@ -1,47 +1,62 @@
 #!/usr/bin/env python
 
-import argparse
-import boto
-from boto.s3.key import Key
-import tarfile
-import tempfile
-import glob
-import os
-import requests
-import json
-import ConfigParser
-import re
-import urlparse
 import base64
-import git
+#import json
+import os
+#import re
+import requests
+import tarfile
+
+from argparse import ArgumentParser
+from boto import connect_s3
+from boto.s3.key import Key
+from ConfigParser import ConfigParser
+from git import Repo
+from glob import glob
+from tempfile import mkdtemp, NamedTemporaryFile
+from urlparse import urlsplit
+
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
     def __init__(self, tarfile):
         self.tarfile = tarfile
-        self.tar_tempdir = tempfile.mkdtemp()
+        self.tar_tempdir = mkdtemp()
+
+    @property
+    def docker_images_dir(self):
+        """Temp dir of docker images"""
+        return self.tar_tempdir + '/web'
 
     @property
     def crane_metadata_file(self):
         """Full path to crane metadata file"""
-        json_files = glob.glob(self.tar_tempdir + "/*.json")
+        json_files = glob(self.tar_tempdir + '/*.json')
         if len(json_files) == 1:
             return json_files[0]
         else:
-            print "More than one metadata file found"
+            print 'More than one metadata file found'
             exit(1)
+
+    def extract_tar(self, image_tarfile):
+        """Extract tarfile into temp dir"""
+        tar = tarfile.open(image_tarfile)
+        tar.extractall(path=self.tar_tempdir)
+        print 'Extracted tarfile to %s' % self.tar_tempdir
+        print self.crane_metadata_file
+        tar.close()
 
     def get_tarfile(self):
         """Get a tarfile plus json metadata from url or local file"""
-        parts = urlparse.urlsplit(self.tarfile)
+        parts = urlsplit(self.tarfile)
         if not parts.scheme or not parts.netloc:
-            print "Using local file %s" % self.tarfile
+            print 'Using local file %s' % self.tarfile
             self.extract_tar(self.tarfile)
         else:
             from urllib2 import Request, urlopen, URLError
             req = Request(self.tarfile)
             try:
-                print "Fetching file via URL %s" %  self.tarfile
+                print 'Fetching file via URL %s' % self.tarfile
                 response = urlopen(req)
             except URLError as e:
                 if hasattr(e, 'reason'):
@@ -51,23 +66,11 @@ class PulpTar(object):
                     print 'The server couldn\'t fulfill the request.'
                     print 'Error code: ', e.code
             else:
-                raw_tarfile = tempfile.NamedTemporaryFile(mode='wb', suffix='.tar')
+                raw_tarfile = NamedTemporaryFile(mode='wb', suffix='.tar')
                 raw_tarfile.write(response.read())
-                print "Write file %s from URL" % raw_tarfile.name
+                print 'Write file %s from URL' % raw_tarfile.name
                 self.extract_tar(raw_tarfile.name)
 
-    @property
-    def docker_images_dir(self):
-        """Temp dir of docker images"""
-        return self.tar_tempdir + "/web"
-
-    def extract_tar(self, image_tarfile):
-        """Extract tarfile into temp dir"""
-        tar = tarfile.open(image_tarfile)
-        tar.extractall(path=self.tar_tempdir)
-        print "Extracted tarfile to %s" % self.tar_tempdir
-        print self.crane_metadata_file
-        tar.close()
 
 class AwsS3(object):
     """Interactions with AWS S3"""
@@ -79,10 +82,10 @@ class AwsS3(object):
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
-        s3 = boto.connect_s3()
+        s3 = connect_s3()
         bucket = s3.create_bucket(self.bucket)
-        print "Created S3 bucket %s" % self.bucket
-        print "Uploading image layers to S3"
+        print 'Created S3 bucket %s' % self.bucket
+        print 'Uploading image layers to S3'
         for f, path in files:
             with open(f, 'rb') as f:
                 dest = os.path.join((self.app), path)
@@ -96,11 +99,11 @@ class AwsS3(object):
         files = []
         if os.path.isdir(layer_dir):
             # Walk the directory to get all the files to be uploaded
-            for dirpath, dirnames, filenames in os.walk(layer_dir):
+            for dirpath, _, filenames in os.walk(layer_dir):
                 for filename in filenames:
                     layer_id = dirpath.split('/')
                     if layer_id[-1] in self.mask_layers:
-                        print "Skipping layer %s" % layer_id[-1]
+                        print 'Skipping layer %s' % layer_id[-1]
                         continue
                     filename = os.path.join(dirpath, filename)
                     files.append((filename, os.path.relpath(filename, layer_dir)))
@@ -108,6 +111,7 @@ class AwsS3(object):
             assert os.path.exists(layer_dir), '%s does not exist' % layer_dir
             files.append((layer_dir, os.path.basename(layer_dir)))
         return files
+
 
 class Openshift(object):
     """Interact with Openshift REST API"""
@@ -120,8 +124,8 @@ class Openshift(object):
         self.app_git_url = kwargs['app_git_url']
         self.domain = kwargs['domain']
         self.cartridge = kwargs['cartridge']
-        #FIXME:
-        self.app_name = "registry"
+        # FIXME:
+        self.app_name = 'registry'
         self.app_data = None
         #self.cranefile = cranefile
 
@@ -131,26 +135,38 @@ class Openshift(object):
 
     @property
     def env_vars(self):
-        """required environment variables to make crane work on openshift"""
-        return [("OPENSHIFT_PYTHON_WSGI_APPLICATION", "crane/wsgi.py"), ("OPENSHIFT_PYTHON_DOCUMENT_ROOT", "crane/")]
+        """Required environment variables to make crane work on openshift"""
+        return [('OPENSHIFT_PYTHON_WSGI_APPLICATION', 'crane/wsgi.py'), ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
 
-    def call_openshift(self, url, req_type="get", payload=None):
-        if req_type in "get":
+    def call_openshift(self, url, req_type='get', payload=None):
+        if req_type in 'get':
             r = requests.get(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password))
         else:
             r = requests.post(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password), data=payload)
         return r
 
+    def restart_app(self):
+        payload = {'event': 'restart'}
+        self.call_openshift(self.app_data['links']['RESTART']['href'], 'post', payload)
+        print 'Restarting application'
+
+    def set_env_vars(self, url):
+        for var in self.env_vars:
+            payload = {'name': var[0],
+                       'value': var[1]}
+            self.call_openshift(url, 'post', payload)
+            print 'Setting environment variable %s' % var[0]
+
     def create_app(self):
         """Create an Openshift application"""
-        payload = {"name": self.app_name,
-                   "cartridge": self.cartridge,
-                   #"scale": True,
-                   "initial_git_url": self.app_git_url}
-        url = self.server_url + "/broker/rest/domains/" + self.domain + "/applications"
-        print "Creating OpenShift application"
-        r = self.call_openshift(url, "post", payload)
-        print "Created app %s" % self.app_name
+        payload = {'name': self.app_name,
+                   'cartridge': self.cartridge,
+                   #'scale': True,
+                   'initial_git_url': self.app_git_url}
+        url = self.server_url + '/broker/rest/domains/' + self.domain + '/applications'
+        print 'Creating OpenShift application'
+        r = self.call_openshift(url, 'post', payload)
+        print 'Created app %s' % self.app_name
         #self.app_id = r.text['data']['id']
         text = r.json()
         #print json.dumps(r.json(), indent=4)
@@ -158,25 +174,21 @@ class Openshift(object):
         self.set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
         self.restart_app()
 
-    def set_env_vars(self, url):
-        for var in self.env_vars:
-            payload = {"name": var[0],
-                       "value": var[1]}
-            r = self.call_openshift(url, "post", payload)
-            print "Setting environment variable %s" % var[0]
-
-    def restart_app(self):
-        payload = {"event": "restart"}
-        r = self.call_openshift(self.app_data['links']['RESTART']['href'], "post", payload)
-        print "restarting application"
-
 
 class Configuration(object):
     """Configuration and utilities"""
-
     def __init__(self, repo_url):
         self.config_repo = self.git_clone(repo_url)
         self.index = None
+
+    @property
+    def conf_dir(self):
+        return mkdtemp()
+
+    @property
+    def conf(self):
+        conf = ConfigParser()
+        return conf.read('%s/raas.cfg' % self.conf_dir)
 
     def git_clone(self, repo_url, directory=None):
         """Clone using GitPython"""
@@ -193,51 +205,38 @@ class Configuration(object):
         origin = self.config_repo.remotes.origin
         return origin.push()
 
-    @property
-    def conf_dir(self):
-        return tempfile.mkdtemp()
-
-    @property
-    def conf(self):
-        conf = ConfigParser.ConfigParser()
-        return conf.read('%s/raas.cfg' % self.conf_dir)
-
 
 def main():
     """Entrypoint for script"""
-
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
-    status_parser = subparsers.add_parser('status', help='Check configuration status')
-    setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
-    push_parser = subparsers.add_parser('push', help='Push or update and image')
-    push_parser.add_argument('image',
-                             metavar='IMAGE',
-                             help='Image name')
-
+    subparsers.add_parser('status', help='Check configuration status')
+    subparsers.add_parser('setup', help='Setup initial configuration')
+    push_parser = subparsers.add_parser('push', help='Push or update an image')
+    push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
     # TODO: use env var RAAS_CONF_REPO
-    isv = Configuration(os.getenv("RAAS_CONF_REPO"))
+    isv = Configuration(os.getenv('RAAS_CONF_REPO'))
     print isv.conf
 
-    if args.action in "status":
-        print "status"
+    if args.action in 'status':
+        print 'status'
         quit()
-    elif args.action in "setup":
-        print "setup"
+    elif args.action in 'setup':
+        print 'setup'
         quit()
-    elif args.action in "push":
-        print "push", args.image
+    elif args.action in 'push':
+        print 'push', args.image
         #mask_layers = conf.get('redhat', 'mask_layers')
         #mask_layers = re.split(',| |\n', mask_layers.strip())
         #pulp = PulpTar(args.tarfile)
         #pulp.get_tarfile()
         #cranefile = pulp.crane_metadata_file
-        #kwargs = {"bucket_name": args.bucket_name,
-        #          "app_name": args.app_name,
-        #          "images_dir": pulp.docker_images_dir,
-        #          "mask_layers": mask_layers}
+        #kwargs = {'bucket_name': args.bucket_name,
+        #          'app_name': args.app_name,
+        #          'images_dir': pulp.docker_images_dir,
+        #          'mask_layers': mask_layers}
         #s3 = AwsS3(**kwargs)
         #files = s3.walk_dir(pulp.docker_images_dir)
         #s3.upload_layers(files)
@@ -248,4 +247,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

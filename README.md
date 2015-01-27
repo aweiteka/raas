@@ -78,7 +78,7 @@ This provides access to `aws`, `rhc` and `git` tools. You may need to edit `~/.o
 ## In Use
 
 ```
-$ ./raas.py bigdatainc bigdata-app
+$ ./raas.py push bigdatainc bigdata-app
 Using local file bigdata-app.tar
 Extracted tarfile to /tmp/tmpgDuAh6
 /tmp/tmpgDuAh6/bigdata-app.json

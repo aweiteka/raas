@@ -11,17 +11,19 @@ A prototype docker registry service in the cloud that integrates with Pulp and t
 
 ## Installation
 1. Install Python dependencies: `pip install -r requirements.txt`
-1. Copy config file `cp raas.cfg.template raas.cfg`
-1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
 
 ## Configuration
-1. Copy the common configuration file
+
+There are two ways to manage the configuration of the tool. To use a local configuration, run `raas` from the directory where the `raas.cfg` directory.
+
+### Local (development environment)
+1. Copy config file `cp raas.cfg.template raas.cfg`
 
 ```
 cp raas.cfg.template raas.cfg
 ```
 
-1. Edit raas.cfg config file, commit and push to private repository
+1. Edit `raas.cfg` config file.
 
 ```
 [redhat]
@@ -44,6 +46,9 @@ password = password
 domain = mydomain
 cartridge = python-2.7
 ```
+
+### Remote (production environment)
+1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
 
 ### AWS S3
 

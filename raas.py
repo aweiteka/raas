@@ -177,13 +177,19 @@ class Openshift(object):
 
 class Configuration(object):
     """Configuration and utilities"""
-    def __init__(self, repo_url):
-        self.config_repo = self.git_clone(repo_url)
+    def __init__(self):
+        """Use local config if exists, otherwise clone based on env var repo"""
+        if not os.path.isfile('raas.cfg'):
+            repo_url = os.getenv('RAAS_CONF_REPO'):
+            self.config_repo = self.git_clone(repo_url)
         self.index = None
 
     @property
     def conf_dir(self):
-        return mkdtemp()
+        if os.path.isfile('raas.cfg'):
+            return os.getcwd()
+        else:
+            return mkdtemp()
 
     @property
     def conf(self):
@@ -216,8 +222,7 @@ def main():
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
-    # TODO: use env var RAAS_CONF_REPO
-    isv = Configuration(os.getenv('RAAS_CONF_REPO'))
+    isv = Configuration()
     print isv.conf
 
     if args.action in 'status':

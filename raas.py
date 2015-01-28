@@ -180,7 +180,7 @@ class Configuration(object):
     def __init__(self):
         """Use local config if exists, otherwise clone based on env var repo"""
         if not os.path.isfile('raas.cfg'):
-            repo_url = os.getenv('RAAS_CONF_REPO'):
+            repo_url = os.getenv('RAAS_CONF_REPO')
             self.config_repo = self.git_clone(repo_url)
         self.index = None
 
@@ -211,10 +211,18 @@ class Configuration(object):
         origin = self.config_repo.remotes.origin
         return origin.push()
 
+    def commit_all_changes(self):
+        #self.git_add(FIXME)
+        #self.git_commit(FIXME)
+        #self.git_push()
+        print "not implemented"
+        return
 
 def main():
     """Entrypoint for script"""
     parser = ArgumentParser()
+    parser.add_argument('-n', '--nocommit', action='store_true',
+                        help='Do not commit configuration. Development only.')
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     subparsers.add_parser('status', help='Check configuration status')
     subparsers.add_parser('setup', help='Setup initial configuration')
@@ -249,6 +257,8 @@ def main():
         #os.create_app()
         quit()
 
+    if not args.nocommit:
+        isv.commit_all_changes()
 
 if __name__ == '__main__':
     main()

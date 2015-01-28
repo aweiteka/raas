@@ -2,6 +2,7 @@
 
 import base64
 #import json
+import logging
 import os
 #import re
 import requests
@@ -117,12 +118,11 @@ class Openshift(object):
     """Interact with Openshift REST API"""
     def __init__(self, **kwargs):
         # auth_token supported?
-        self.auth_token = kwargs['auth_token']
+        #self.auth_token = kwargs['auth_token']
         self.username = kwargs['username']
         self.password = kwargs['password']
         self.server_url = kwargs['server_url']
         self.app_git_url = kwargs['app_git_url']
-        self.domain = kwargs['domain']
         self.cartridge = kwargs['cartridge']
         # FIXME:
         self.app_name = 'registry'
@@ -132,6 +132,14 @@ class Openshift(object):
     @property
     def credentials(self):
         return base64.encodestring('%s:%s' % (self.username, self.password))[:-1]
+    
+    @property
+    def domain(self):
+        return self._domain
+
+    @domain.setter
+    def domain(self, val):
+        self._domain = val
 
     @property
     def env_vars(self):
@@ -174,103 +182,151 @@ class Openshift(object):
         self.set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
         self.restart_app()
 
+    def verify_domain(self):
+        """Verify that Openshift domain exists"""
+        url = self.server_url + '/broker/rest/domains/' + self.domain
+        print 'Verifing Openshift domain'
+        r = self.call_openshift(url)
+        r_json = r.json()
+        print r_json['messages'][0]['text']
+        return r_json['messages'][0]['exit_code'] == 0
+
 
 class Configuration(object):
     """Configuration and utilities"""
+
+    _CONFIG_FILE_NAME = 'raas.cfg'
+    _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
+
     def __init__(self, isv):
-        """Use local config if exists, otherwise clone based on env var repo"""
-        self.config_file = 'raas.cfg'
-        if not os.path.isfile(self.config_file):
-            repo_url = os.getenv('RAAS_CONF_REPO')
-            self.config_repo = self.git_clone(repo_url)
+        """Setup Configuration object.
+
+        Use current working dir as local config if it exists,
+        otherwise clone repo based on RAAS_CONF_REPO env var.
+        """
         self.isv = isv
-        self.index = None
 
-    @property
-    def conf_dir(self):
-        if os.path.isfile('raas.cfg'):
-            return os.getcwd()
+        if os.path.isfile(self._CONFIG_FILE_NAME):
+            self._conf_dir = os.getcwd()
         else:
-            return mkdtemp()
+            repo_url = os.getenv(self._CONFIG_REPO_ENV_VAR)
+            if not repo_url:
+                raise Exception('Current working directory does not contain {0} configuration file ' + \
+                        'and environment variable {1} is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
+            self._conf_dir = mkdtemp()
+            self._git_clone(repo_url)
+
+        self._conf_file = os.path.join(self._conf_dir, self._CONFIG_FILE_NAME)
+        if not os.path.isfile(self._conf_file):
+            raise Exception('Configuration file {0} not found'.format(self._conf_file))
+        self._parsed_config = ConfigParser()
+        self._parsed_config.read(self._conf_file)
+
+        logging.info('Using conf dir: {0}'.format(self._conf_dir))
+        logging.info('Using conf file: {0}'.format(self._conf_file))
+
+        self._setup_isv_config_dirs()
+        self._setup_isv_config_file()
 
     @property
-    def conf(self):
-        conf = ConfigParser()
-        conf.read('/'.join([self.conf_dir, self.config_file]))
-        return conf
+    def isv(self):
+        return self._isv
 
-    def git_clone(self, repo_url, directory=None):
-        """Clone using GitPython"""
-        return Repo.clone_from(repo_url, self.conf_dir)
+    @isv.setter
+    def isv(self, val):
+        if not val.isalnum():
+            raise ValueError('ISV must contain only alphanumeric characters: {0}'.format(val))
+        self._isv = val.lower()
+        logging.debug('ISV set to {0}'.format(self.isv))
 
-    def git_add(self, files):
-        self.index = self.config_repo.index
-        self.index.add(files)
+    @property
+    def parsed_config(self):
+        return self._parsed_config
 
-    def git_commit(self, message):
-        self.index.commit(message)
+    def _git_clone(self, repo_url):
+        """Clone repo using GitPython"""
+        logging.info('Clonning git repo to: {0}'.format(self._conf_dir))
+        self._config_repo = Repo.clone_from(repo_url, self._conf_dir)
 
-    def git_push(self):
-        origin = self.config_repo.remotes.origin
-        return origin.push()
+    def _git_add(self, files):
+        self._config_repo._index.add(files)
+
+    def _git_commit(self, message):
+        self._config_repo._index.commit(message)
+
+    def _git_push(self):
+        return self._config_repo.remotes.origin.push()
 
     def commit_all_changes(self):
-        #self.git_add(FIXME)
-        #self.git_commit(FIXME)
-        #self.git_push()
-        print "not implemented"
-        return
+        #self._git_add(FIXME)
+        #self._git_commit(FIXME)
+        #self._git_push()
+        raise NotImplemented()
 
-    def setup_isv_config_dirs(self):
-        logdir = '/'.join([self.conf_dir, self.isv, 'logs'])
-        metadir = '/'.join([self.conf_dir, self.isv, 'metadata'])
+    def _setup_isv_config_dirs(self):
+        logdir = os.path.join(self._conf_dir, self.isv, 'logs')
+        metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
         if not os.path.exists(logdir):
-           os.makedirs(logdir)
+            logging.info('Creating log dir: {0}'.format(logdir))
+            os.makedirs(logdir)
         if not os.path.exists(metadir):
-           os.makedirs(metadir)
+            logging.info('Creating metadata dir: {0}'.format(metadir))
+            os.makedirs(metadir)
 
-    def setup_isv_config_file(self):
-        """setup config file defaults if not provided"""
-        # TODO: not working
-        #if not self.conf.has_section(self.isv)
-            #self.conf.add_section(self.isv)
-            #self.conf.set(self.isv, 'openshift_app', 'registry')
-            #self.conf.set(self.isv, 'openshift_domain', self.isv)
-            #self.conf.set(self.isv, 's3_bucket', None)
-            #with open('/'.join([self.conf_dir, self.config_file]), 'a') as configfile:
-            #    self.conf.write(configfile)
-        pass
+    def _setup_isv_config_file(self):
+        """Setup config file defaults if not provided"""
+        if not self.parsed_config.has_section(self.isv):
+            logging.info('Creating default ISV section in config file')
+            self.parsed_config.add_section(self.isv)
+            self.parsed_config.set(self.isv, 'openshift_domain', self.isv)
+            self.parsed_config.set(self.isv, 'openshift_app', 'registry')
+            self.parsed_config.set(self.isv, 's3_bucket', None)
+            with open(self._conf_file, 'w') as configfile:
+                self.parsed_config.write(configfile)
 
 
 def main():
     """Entrypoint for script"""
+    isv_args = ['isv']
+    isv_kwargs = {'metavar': 'ISV_NAME',
+                  'help': 'ISV name matching config file and OpenShift Online domain'}
     parser = ArgumentParser()
+    parser.add_argument('-l', '--log', metavar='LOG_LEVEL',
+            help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
     parser.add_argument('-n', '--nocommit', action='store_true',
                         help='Do not commit configuration. Development only.')
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
-    status_parser.add_argument('isv', metavar='ISV_NAME',
-        help='ISV name matching config file and OpenShift Online domain')
+    status_parser.add_argument(*isv_args, **isv_kwargs)
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
-    setup_parser.add_argument('isv', metavar='ISV_NAME',
-        help='ISV name matching config file and OpenShift Online domain')
+    setup_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser = subparsers.add_parser('push', help='Push or update an image')
-    push_parser.add_argument('isv', metavar='ISV_NAME',
-        help='ISV name matching config file and OpenShift Online domain')
+    push_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
-    isv = Configuration(args.isv)
+    log_level = getattr(logging, args.log.upper(), None)
+    if isinstance(log_level, int):
+        logging.basicConfig(level=log_level)
+
+    config = Configuration(args.isv)
+    oshift = Openshift(**config.parsed_config._sections['openshift'])
+    oshift.domain = config.isv
 
     if args.action in 'status':
         print 'status'
+        if not oshift.verify_domain():
+            print 'Failed to verify Openshift domain'
+            exit(1)
+        print 'Status OK'
+
     elif args.action in 'setup':
-        isv.setup_isv_config_dirs()
-        isv.setup_isv_config_file()
+        config.setup_isv_config_dirs()
+        config.setup_isv_config_file()
 
     elif args.action in 'push':
         print 'push', args.image
-        #mask_layers = conf.get('redhat', 'mask_layers')
+        #mask_layers = conf_file.get('redhat', 'mask_layers')
         #mask_layers = re.split(',| |\n', mask_layers.strip())
         #pulp = PulpTar(args.tarfile)
         #pulp.get_tarfile()
@@ -282,12 +338,12 @@ def main():
         #s3 = AwsS3(**kwargs)
         #files = s3.walk_dir(pulp.docker_images_dir)
         #s3.upload_layers(files)
-        #os = Openshift(**conf._sections['openshift'])
+        #os = Openshift(**conf_file._sections['openshift'])
         #os.create_app()
         quit()
 
     if not args.nocommit:
-        isv.commit_all_changes()
+        config.commit_all_changes()
 
 if __name__ == '__main__':
     main()

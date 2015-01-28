@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-import base64
-#import json
+import json
 import logging
 import os
 #import re
 import requests
+import sys
 import tarfile
 
 from argparse import ArgumentParser
@@ -116,12 +116,11 @@ class AwsS3(object):
 
 class Openshift(object):
     """Interact with Openshift REST API"""
+
     def __init__(self, **kwargs):
-        # auth_token supported?
-        #self.auth_token = kwargs['auth_token']
-        self.username = kwargs['username']
-        self.password = kwargs['password']
-        self.server_url = kwargs['server_url']
+        self._server_url = kwargs['server_url']
+        self._username = kwargs['username']
+        self._password = kwargs['password']
         self.app_git_url = kwargs['app_git_url']
         self.cartridge = kwargs['cartridge']
         # FIXME:
@@ -130,40 +129,53 @@ class Openshift(object):
         #self.cranefile = cranefile
 
     @property
-    def credentials(self):
-        return base64.encodestring('%s:%s' % (self.username, self.password))[:-1]
-    
-    @property
     def domain(self):
         return self._domain
 
     @domain.setter
     def domain(self, val):
         self._domain = val
+        logging.debug('Domain set to {0}'.format(self.domain))
 
     @property
-    def env_vars(self):
+    def _env_vars(self):
         """Required environment variables to make crane work on openshift"""
-        return [('OPENSHIFT_PYTHON_WSGI_APPLICATION', 'crane/wsgi.py'), ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
+        return [('OPENSHIFT_PYTHON_WSGI_APPLICATION', 'crane/wsgi.py'),
+                ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
 
-    def call_openshift(self, url, req_type='get', payload=None):
-        if req_type in 'get':
-            r = requests.get(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password))
+    def _call_openshift(self, url, req_type='get', payload=None):
+        if req_type == 'get':
+            logging.info('Calling Openshift URL: {0}'.format(url))
+            r = requests.get(url, auth=(self._username, self._password))
+        elif req_type == 'post':
+            logging.info('Posting to Openshift URL: {0}'.format(url))
+            r = requests.post(url, auth=(self._username, self._password), data=payload)
         else:
-            r = requests.post(url, auth=requests.auth.HTTPBasicAuth(self.username, self.password), data=payload)
-        return r
+            raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
+        r_json = r.json()
 
-    def restart_app(self):
+        logging.debug('Openshift HTTP status code: {0}'.format(r.status_code))
+        logging.debug('Openshift JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
+
+        if r_json['messages']:
+            msgs = ''
+            for m in r_json['messages']:
+                msgs += '\n - ' + m['text']
+            logging.info('Messages from Openshift response:{0}'.format(msgs))
+
+        return r_json
+
+    def _restart_app(self):
+        logging.info('Restarting application')
         payload = {'event': 'restart'}
-        self.call_openshift(self.app_data['links']['RESTART']['href'], 'post', payload)
-        print 'Restarting application'
+        self._call_openshift(self.app_data['links']['RESTART']['href'], 'post', payload)
 
-    def set_env_vars(self, url):
-        for var in self.env_vars:
+    def _set_env_vars(self, url):
+        for var in self._env_vars:
+            logging.info('Setting environment variable: {0}'.format(var[0]))
             payload = {'name': var[0],
                        'value': var[1]}
-            self.call_openshift(url, 'post', payload)
-            print 'Setting environment variable %s' % var[0]
+            self._call_openshift(url, 'post', payload)
 
     def create_app(self):
         """Create an Openshift application"""
@@ -171,25 +183,23 @@ class Openshift(object):
                    'cartridge': self.cartridge,
                    #'scale': True,
                    'initial_git_url': self.app_git_url}
-        url = self.server_url + '/broker/rest/domains/' + self.domain + '/applications'
-        print 'Creating OpenShift application'
-        r = self.call_openshift(url, 'post', payload)
-        print 'Created app %s' % self.app_name
+        url = self._server_url + '/broker/rest/domains/' + self.domain + '/applications'
+        logging.info('Creating OpenShift application')
+        text = self._call_openshift(url, 'post', payload)
+        logging.info('Created app: {0}'.format(self.app_name))
         #self.app_id = r.text['data']['id']
-        text = r.json()
         #print json.dumps(r.json(), indent=4)
         self.app_data = text['data']
-        self.set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
-        self.restart_app()
+        self._set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
+        self._restart_app()
 
     def verify_domain(self):
         """Verify that Openshift domain exists"""
-        url = self.server_url + '/broker/rest/domains/' + self.domain
-        print 'Verifing Openshift domain'
-        r = self.call_openshift(url)
-        r_json = r.json()
-        print r_json['messages'][0]['text']
-        return r_json['messages'][0]['exit_code'] == 0
+        url = self._server_url + '/broker/rest/domains/' + self.domain
+        logging.info('Verifying Openshift domain: {0}'.format(self.domain))
+        r_json = self._call_openshift(url)
+        if r_json['status'] != 'ok':
+            raise Exception('Domain not found: {0}'.format(self.domain))
 
 
 class Configuration(object):
@@ -305,20 +315,34 @@ def main():
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
-    log_level = getattr(logging, args.log.upper(), None)
-    if isinstance(log_level, int):
-        logging.basicConfig(level=log_level)
+    if args.log:
+        log_level = getattr(logging, args.log.upper(), None)
+        if isinstance(log_level, int):
+            logging.basicConfig(level=log_level)
 
-    config = Configuration(args.isv)
-    oshift = Openshift(**config.parsed_config._sections['openshift'])
-    oshift.domain = config.isv
+    try:
+        config = Configuration(args.isv)
+    except Exception as e:
+        logging.critical('Failed to initialize raas: {0}'.format(e))
+        sys.exit(1)
+
+    try:
+        openshift = Openshift(**config.parsed_config._sections['openshift'])
+        openshift.domain = config.isv
+    except Exception as e:
+        logging.critical('Failed to initialize Openshift: {0}'.format(e))
+        sys.exit(1)
 
     if args.action in 'status':
-        print 'status'
-        if not oshift.verify_domain():
-            print 'Failed to verify Openshift domain'
-            exit(1)
-        print 'Status OK'
+        status = True
+        try:
+            openshift.verify_domain()
+            print 'Openshift domain "{0}" looks OK'.format(openshift.domain)
+        except Exception as e:
+            logging.error('Failed to verify Openshift domain: {0}'.format(e))
+            status = False
+        if status:
+            print 'Status of "{0}" should be OK'.format(config.isv)
 
     elif args.action in 'setup':
         config.setup_isv_config_dirs()

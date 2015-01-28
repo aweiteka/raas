@@ -225,9 +225,9 @@ class Configuration(object):
         logdir = '/'.join([self.conf_dir, self.isv, 'logs'])
         metadir = '/'.join([self.conf_dir, self.isv, 'metadata'])
         if not os.path.exists(logdir):
-           os.makedirs(logdir)
+            os.makedirs(logdir)
         if not os.path.exists(metadir):
-           os.makedirs(metadir)
+            os.makedirs(metadir)
 
     def setup_isv_config_file(self):
         """setup config file defaults if not provided"""

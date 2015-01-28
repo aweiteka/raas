@@ -12,6 +12,7 @@ RUN pip install -r /root/raas/requirements.txt
 RUN pip install awscli
 RUN gem install rhc
 
-WORKDIR /root/raas
+RUN ln -s /root/raas/raas.py /usr/bin/raas
+
 CMD ["bash"]
 

@@ -225,6 +225,9 @@ class Configuration(object):
         logging.info('Using conf dir: {0}'.format(self._conf_dir))
         logging.info('Using conf file: {0}'.format(self._conf_file))
 
+        self._setup_isv_config_dirs()
+        self._setup_isv_config_file()
+
     @property
     def isv(self):
         return self._isv
@@ -242,6 +245,7 @@ class Configuration(object):
 
     def _git_clone(self, repo_url):
         """Clone repo using GitPython"""
+        logging.info('Clonning git repo to: {0}'.format(self._conf_dir))
         self._config_repo = Repo.clone_from(repo_url, self._conf_dir)
 
     def _git_add(self, files):
@@ -259,25 +263,26 @@ class Configuration(object):
         #self._git_push()
         raise NotImplemented()
 
-    def setup_isv_config_dirs(self):
+    def _setup_isv_config_dirs(self):
         logdir = os.path.join(self._conf_dir, self.isv, 'logs')
         metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
         if not os.path.exists(logdir):
+            logging.info('Creating log dir: {0}'.format(logdir))
             os.makedirs(logdir)
         if not os.path.exists(metadir):
+            logging.info('Creating metadata dir: {0}'.format(metadir))
             os.makedirs(metadir)
 
-    def setup_isv_config_file(self):
+    def _setup_isv_config_file(self):
         """Setup config file defaults if not provided"""
-        # TODO: not working
-        #if not self.parsed_config.has_section(self.isv)
-            #self.parsed_config.add_section(self.isv)
-            #self.parsed_config.set(self.isv, 'openshift_app', 'registry')
-            #self.parsed_config.set(self.isv, 'openshift_domain', self.isv)
-            #self.parsed_config.set(self.isv, 's3_bucket', None)
-            #with open(self._conf_file, 'a') as configfile:
-            #    self.parsed_config.write(configfile)
-        raise NotImplemented()
+        if not self.parsed_config.has_section(self.isv):
+            logging.info('Creating default ISV section in config file')
+            self.parsed_config.add_section(self.isv)
+            self.parsed_config.set(self.isv, 'openshift_domain', self.isv)
+            self.parsed_config.set(self.isv, 'openshift_app', 'registry')
+            self.parsed_config.set(self.isv, 's3_bucket', None)
+            with open(self._conf_file, 'w') as configfile:
+                self.parsed_config.write(configfile)
 
 
 def main():

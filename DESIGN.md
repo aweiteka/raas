@@ -36,6 +36,8 @@ The config repo keeps logs and a backup of the crane metadata files from the Ope
 /path/to/config
 .
 ├── raas.cfg
+├── crane-releases
+│   └── crane-python-crane-0.2.2-1.tar.gz
 ├── redhat
 │   └── metadata
 │       ├── rhel6.json

@@ -117,12 +117,11 @@ class Openshift(object):
     """Interact with Openshift REST API"""
     def __init__(self, **kwargs):
         # auth_token supported?
-        self.auth_token = kwargs['auth_token']
+        #self.auth_token = kwargs['auth_token']
         self.username = kwargs['username']
         self.password = kwargs['password']
         self.server_url = kwargs['server_url']
         self.app_git_url = kwargs['app_git_url']
-        self.domain = kwargs['domain']
         self.cartridge = kwargs['cartridge']
         # FIXME:
         self.app_name = 'registry'
@@ -132,6 +131,14 @@ class Openshift(object):
     @property
     def credentials(self):
         return base64.encodestring('%s:%s' % (self.username, self.password))[:-1]
+    
+    @property
+    def domain(self):
+        return self._domain
+
+    @domain.setter
+    def domain(self, val):
+        self._domain = val
 
     @property
     def env_vars(self):
@@ -174,6 +181,15 @@ class Openshift(object):
         self.set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
         self.restart_app()
 
+    def verify_domain(self):
+        """Verify that Openshift domain exists"""
+        url = self.server_url + '/broker/rest/domains/' + self.domain
+        print 'Verifing Openshift domain'
+        r = self.call_openshift(url)
+        r_json = r.json()
+        print r_json['messages'][0]['text']
+        return r_json['messages'][0]['exit_code'] == 0
+
 
 class Configuration(object):
     """Configuration and utilities"""
@@ -194,7 +210,7 @@ class Configuration(object):
             return mkdtemp()
 
     @property
-    def conf(self):
+    def conf_file(self):
         conf = ConfigParser()
         conf.read('/'.join([self.conf_dir, self.config_file]))
         return conf
@@ -218,7 +234,7 @@ class Configuration(object):
         #self.git_add(FIXME)
         #self.git_commit(FIXME)
         #self.git_push()
-        print "not implemented"
+        print 'not implemented'
         return
 
     def setup_isv_config_dirs(self):
@@ -232,13 +248,13 @@ class Configuration(object):
     def setup_isv_config_file(self):
         """setup config file defaults if not provided"""
         # TODO: not working
-        #if not self.conf.has_section(self.isv)
-            #self.conf.add_section(self.isv)
-            #self.conf.set(self.isv, 'openshift_app', 'registry')
-            #self.conf.set(self.isv, 'openshift_domain', self.isv)
-            #self.conf.set(self.isv, 's3_bucket', None)
+        #if not self.conf_file.has_section(self.isv)
+            #self.conf_file.add_section(self.isv)
+            #self.conf_file.set(self.isv, 'openshift_app', 'registry')
+            #self.conf_file.set(self.isv, 'openshift_domain', self.isv)
+            #self.conf_file.set(self.isv, 's3_bucket', None)
             #with open('/'.join([self.conf_dir, self.config_file]), 'a') as configfile:
-            #    self.conf.write(configfile)
+            #    self.conf_file.write(configfile)
         pass
 
 
@@ -260,17 +276,24 @@ def main():
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
-    isv = Configuration(args.isv)
+    config = Configuration(args.isv)
+    oshift = Openshift(**config.conf_file._sections['openshift'])
+    oshift.domain = args.isv
 
     if args.action in 'status':
         print 'status'
+        if not oshift.verify_domain():
+            print 'Failed to verify Openshift domain'
+            exit(1)
+        print 'Status OK'
+
     elif args.action in 'setup':
-        isv.setup_isv_config_dirs()
-        isv.setup_isv_config_file()
+        config.setup_isv_config_dirs()
+        config.setup_isv_config_file()
 
     elif args.action in 'push':
         print 'push', args.image
-        #mask_layers = conf.get('redhat', 'mask_layers')
+        #mask_layers = conf_file.get('redhat', 'mask_layers')
         #mask_layers = re.split(',| |\n', mask_layers.strip())
         #pulp = PulpTar(args.tarfile)
         #pulp.get_tarfile()
@@ -282,12 +305,12 @@ def main():
         #s3 = AwsS3(**kwargs)
         #files = s3.walk_dir(pulp.docker_images_dir)
         #s3.upload_layers(files)
-        #os = Openshift(**conf._sections['openshift'])
+        #os = Openshift(**conf_file._sections['openshift'])
         #os.create_app()
         quit()
 
     if not args.nocommit:
-        isv.commit_all_changes()
+        config.commit_all_changes()
 
 if __name__ == '__main__':
     main()

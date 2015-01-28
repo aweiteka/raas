@@ -36,6 +36,11 @@ The config repo keeps logs and a backup of the crane metadata files from the Ope
 /path/to/config
 .
 ├── raas.cfg
+├── redhat
+│   └── metadata
+│       ├── rhel6.json
+│       ├── rhel7.json
+│       └── ...
 ├── <isv1>
 │   ├── logs
 │   │   ├── yyyy-mm-dd.log

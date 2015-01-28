@@ -244,19 +244,19 @@ class Configuration(object):
 
 def main():
     """Entrypoint for script"""
+    isv_args = ['isv']
+    isv_kwargs = {'metavar': 'ISV_NAME',
+                  'help': 'ISV name matching config file and OpenShift Online domain'}
     parser = ArgumentParser()
     parser.add_argument('-n', '--nocommit', action='store_true',
                         help='Do not commit configuration. Development only.')
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
-    status_parser.add_argument('isv', metavar='ISV_NAME',
-        help='ISV name matching config file and OpenShift Online domain')
+    status_parser.add_argument(*isv_args, **isv_kwargs)
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
-    setup_parser.add_argument('isv', metavar='ISV_NAME',
-        help='ISV name matching config file and OpenShift Online domain')
+    setup_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser = subparsers.add_parser('push', help='Push or update an image')
-    push_parser.add_argument('isv', metavar='ISV_NAME',
-        help='ISV name matching config file and OpenShift Online domain')
+    push_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 

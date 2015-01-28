@@ -177,11 +177,12 @@ class Openshift(object):
 
 class Configuration(object):
     """Configuration and utilities"""
-    def __init__(self):
+    def __init__(self, isv):
         """Use local config if exists, otherwise clone based on env var repo"""
         if not os.path.isfile('raas.cfg'):
             repo_url = os.getenv('RAAS_CONF_REPO')
             self.config_repo = self.git_clone(repo_url)
+        self.isv = isv
         self.index = None
 
     @property
@@ -224,13 +225,19 @@ def main():
     parser.add_argument('-n', '--nocommit', action='store_true',
                         help='Do not commit configuration. Development only.')
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
-    subparsers.add_parser('status', help='Check configuration status')
-    subparsers.add_parser('setup', help='Setup initial configuration')
+    status_parser = subparsers.add_parser('status', help='Check configuration status')
+    status_parser.add_argument('isv', metavar='ISV_NAME',
+        help='ISV name matching config file and OpenShift Online domain')
+    setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
+    setup_parser.add_argument('isv', metavar='ISV_NAME',
+        help='ISV name matching config file and OpenShift Online domain')
     push_parser = subparsers.add_parser('push', help='Push or update an image')
+    push_parser.add_argument('isv', metavar='ISV_NAME',
+        help='ISV name matching config file and OpenShift Online domain')
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
     args = parser.parse_args()
 
-    isv = Configuration()
+    isv = Configuration(args.isv)
     print isv.conf
 
     if args.action in 'status':

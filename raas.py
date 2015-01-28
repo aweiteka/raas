@@ -219,6 +219,15 @@ class Configuration(object):
         print "not implemented"
         return
 
+    def setup_isv_config_dirs(self):
+        logdir = '/'.join([self.conf_dir, self.isv, 'logs'])
+        metadir = '/'.join([self.conf_dir, self.isv, 'metadata'])
+        print logdir, metadir
+        if not os.path.exists(logdir):
+           os.makedirs(logdir)
+        if not os.path.exists(metadir):
+           os.makedirs(metadir)
+
 def main():
     """Entrypoint for script"""
     parser = ArgumentParser()
@@ -238,14 +247,11 @@ def main():
     args = parser.parse_args()
 
     isv = Configuration(args.isv)
-    print isv.conf
 
     if args.action in 'status':
         print 'status'
-        quit()
     elif args.action in 'setup':
-        print 'setup'
-        quit()
+        isv.setup_isv_config_dirs()
     elif args.action in 'push':
         print 'push', args.image
         #mask_layers = conf.get('redhat', 'mask_layers')

@@ -179,7 +179,8 @@ class Configuration(object):
     """Configuration and utilities"""
     def __init__(self, isv):
         """Use local config if exists, otherwise clone based on env var repo"""
-        if not os.path.isfile('raas.cfg'):
+        self.config_file = 'raas.cfg'
+        if not os.path.isfile(self.config_file):
             repo_url = os.getenv('RAAS_CONF_REPO')
             self.config_repo = self.git_clone(repo_url)
         self.isv = isv
@@ -195,7 +196,8 @@ class Configuration(object):
     @property
     def conf(self):
         conf = ConfigParser()
-        return conf.read('%s/raas.cfg' % self.conf_dir)
+        conf.read('/'.join([self.conf_dir, self.config_file]))
+        return conf
 
     def git_clone(self, repo_url, directory=None):
         """Clone using GitPython"""
@@ -222,11 +224,23 @@ class Configuration(object):
     def setup_isv_config_dirs(self):
         logdir = '/'.join([self.conf_dir, self.isv, 'logs'])
         metadir = '/'.join([self.conf_dir, self.isv, 'metadata'])
-        print logdir, metadir
         if not os.path.exists(logdir):
            os.makedirs(logdir)
         if not os.path.exists(metadir):
            os.makedirs(metadir)
+
+    def setup_isv_config_file(self):
+        """setup config file defaults if not provided"""
+        # TODO: not working
+        #if not self.conf.has_section(self.isv)
+            #self.conf.add_section(self.isv)
+            #self.conf.set(self.isv, 'openshift_app', 'registry')
+            #self.conf.set(self.isv, 'openshift_domain', self.isv)
+            #self.conf.set(self.isv, 's3_bucket', None)
+            #with open('/'.join([self.conf_dir, self.config_file]), 'a') as configfile:
+            #    self.conf.write(configfile)
+        pass
+
 
 def main():
     """Entrypoint for script"""
@@ -252,6 +266,8 @@ def main():
         print 'status'
     elif args.action in 'setup':
         isv.setup_isv_config_dirs()
+        isv.setup_isv_config_file()
+
     elif args.action in 'push':
         print 'push', args.image
         #mask_layers = conf.get('redhat', 'mask_layers')

@@ -93,9 +93,9 @@ class AwsS3(object):
         self._conn = connect_s3()
 
     def verify_bucket(self):
-        logging.info('Looking up bucket: {0}'.format(self._bucket))
+        logging.info('Looking up bucket "{0}"'.format(self._bucket))
         if not self._conn.lookup(self._bucket):
-            raise Exception('Bucket not found: {0}'.format(self._bucket))
+            raise Exception('Bucket "{0}" not found'.format(self._bucket))
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -161,10 +161,10 @@ class Openshift(object):
 
     def _call_openshift(self, url, req_type='get', payload=None):
         if req_type == 'get':
-            logging.info('Calling Openshift URL: {0}'.format(url))
+            logging.info('Calling Openshift URL "{0}"'.format(url))
             r = requests.get(url, auth=(self._username, self._password))
         elif req_type == 'post':
-            logging.info('Posting to Openshift URL: {0}'.format(url))
+            logging.info('Posting to Openshift URL "{0}"'.format(url))
             r = requests.post(url, auth=(self._username, self._password), data=payload)
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
@@ -188,7 +188,7 @@ class Openshift(object):
 
     def _set_env_vars(self, url):
         for var in self._env_vars:
-            logging.info('Setting environment variable: {0}'.format(var[0]))
+            logging.info('Setting environment variable "{0}"'.format(var[0]))
             payload = {'name': var[0],
                        'value': var[1]}
             self._call_openshift(url, 'post', payload)
@@ -202,7 +202,7 @@ class Openshift(object):
         url = self._server_url + '/broker/rest/domains/' + self.domain + '/applications'
         logging.info('Creating OpenShift application')
         text = self._call_openshift(url, 'post', payload)
-        logging.info('Created app: {0}'.format(self.app_name))
+        logging.info('Created app "{0}"'.format(self.app_name))
         #self.app_id = r.text['data']['id']
         #print json.dumps(r.json(), indent=4)
         self.app_data = text['data']
@@ -212,25 +212,25 @@ class Openshift(object):
     def verify_domain(self):
         """Verify that Openshift domain exists"""
         url = '{0}/broker/rest/domains/{1}'.format(self._server_url, self.domain)
-        logging.info('Verifying Openshift domain: {0}'.format(self.domain))
+        logging.info('Verifying Openshift domain "{0}"'.format(self.domain))
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
-            raise Exception('Domain not found: {0}'.format(self.domain))
+            raise Exception('Domain "{0}" not found'.format(self.domain))
 
     def verify_app(self):
         """Verify that Openshift app exists"""
         url = '{0}/broker/rest/domain/{1}/applications'.format(self._server_url, self.domain)
-        logging.info('Verifying Openshift app: {0}'.format(self.app_name))
+        logging.info('Verifying Openshift app "{0}"'.format(self.app_name))
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
-            raise Exception('Failed to get applications in domain: {0}'.format(self.domain))
+            raise Exception('Failed to get applications in domain "{0}"'.format(self.domain))
         for app in r_json['data']:
-            logging.info('Inspecting Openshift app "{0}" with ID: {1}'.format(app['name'], app['id']))
+            logging.info('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
             if app['name'] == self.app_name:
-                logging.info('Found Openshift app "{0}" with ID: {1}'.format(self.app_name, app['id']))
+                logging.info('Found Openshift app "{0}" with ID "{1}"'.format(self.app_name, app['id']))
                 break
         else:
-            raise Exception('Application "{0}" not found in domain: {1}'.format(self.app_name, self.domain))
+            raise Exception('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
 
 
 class Configuration(object):
@@ -252,19 +252,19 @@ class Configuration(object):
         else:
             repo_url = os.getenv(self._CONFIG_REPO_ENV_VAR)
             if not repo_url:
-                raise Exception('Current working directory does not contain {0} configuration file ' + \
-                        'and environment variable {1} is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
+                raise Exception('Current working directory does not contain "{0}" configuration file ' + \
+                        'and environment variable "{1}" is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
             self._conf_dir = mkdtemp()
             self._git_clone(repo_url)
 
         self._conf_file = os.path.join(self._conf_dir, self._CONFIG_FILE_NAME)
         if not os.path.isfile(self._conf_file):
-            raise Exception('Configuration file {0} not found'.format(self._conf_file))
+            raise Exception('Configuration file "{0}" not found'.format(self._conf_file))
         self._parsed_config = ConfigParser()
         self._parsed_config.read(self._conf_file)
 
-        logging.info('Using conf dir: {0}'.format(self._conf_dir))
-        logging.info('Using conf file: {0}'.format(self._conf_file))
+        logging.info('Using conf dir "{0}"'.format(self._conf_dir))
+        logging.info('Using conf file "{0}"'.format(self._conf_file))
 
         self._setup_isv_config_dirs()
         self._setup_isv_config_file()
@@ -276,9 +276,9 @@ class Configuration(object):
     @isv.setter
     def isv(self, val):
         if not val.isalnum():
-            raise ValueError('ISV must contain only alphanumeric characters: {0}'.format(val))
+            raise ValueError('ISV "{0}" must contain only alphanumeric characters'.format(val))
         self._isv = val.lower()
-        logging.debug('ISV set to {0}'.format(self.isv))
+        logging.debug('ISV set to "{0}"'.format(self.isv))
 
     @property
     def openshift_conf(self):
@@ -294,7 +294,7 @@ class Configuration(object):
 
     def _git_clone(self, repo_url):
         """Clone repo using GitPython"""
-        logging.info('Clonning git repo to: {0}'.format(self._conf_dir))
+        logging.info('Clonning git repo to "{0}"'.format(self._conf_dir))
         self._config_repo = Repo.clone_from(repo_url, self._conf_dir)
 
     def _git_add(self, files):
@@ -316,10 +316,10 @@ class Configuration(object):
         logdir = os.path.join(self._conf_dir, self.isv, 'logs')
         metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
         if not os.path.exists(logdir):
-            logging.info('Creating log dir: {0}'.format(logdir))
+            logging.info('Creating log dir "{0}"'.format(logdir))
             os.makedirs(logdir)
         if not os.path.exists(metadir):
-            logging.info('Creating metadata dir: {0}'.format(metadir))
+            logging.info('Creating metadata dir "{0}"'.format(metadir))
             os.makedirs(metadir)
 
     def _setup_isv_config_file(self):

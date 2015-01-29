@@ -133,21 +133,25 @@ class AwsS3(object):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, username, password, domain):
+    def __init__(self, server_url, username, password, domain, app_name):
         self._server_url = server_url
         self._username = username
         self._password = password
         self._domain = domain
+        self._app_name = app_name
         #self.app_git_url = kwargs['app_git_url']
         #self.cartridge = kwargs['cartridge']
         # FIXME:
-        self.app_name = 'registry'
         self.app_data = None
         #self.cranefile = cranefile
 
     @property
     def domain(self):
         return self._domain
+
+    @property
+    def app_name(self):
+        return self._app_name
 
     @property
     def _env_vars(self):
@@ -207,11 +211,26 @@ class Openshift(object):
 
     def verify_domain(self):
         """Verify that Openshift domain exists"""
-        url = self._server_url + '/broker/rest/domains/' + self.domain
+        url = '{0}/broker/rest/domains/{1}'.format(self._server_url, self.domain)
         logging.info('Verifying Openshift domain: {0}'.format(self.domain))
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
             raise Exception('Domain not found: {0}'.format(self.domain))
+
+    def verify_app(self):
+        """Verify that Openshift app exists"""
+        url = '{0}/broker/rest/domain/{1}/applications'.format(self._server_url, self.domain)
+        logging.info('Verifying Openshift app: {0}'.format(self.app_name))
+        r_json = self._call_openshift(url)
+        if r_json['status'] != 'ok':
+            raise Exception('Failed to get applications in domain: {0}'.format(self.domain))
+        for app in r_json['data']:
+            logging.info('Inspecting Openshift app "{0}" with ID: {1}'.format(app['name'], app['id']))
+            if app['name'] == self.app_name:
+                logging.info('Found Openshift app "{0}" with ID: {1}'.format(self.app_name, app['id']))
+                break
+        else:
+            raise Exception('Application "{0}" not found in domain: {1}'.format(self.app_name, self.domain))
 
 
 class Configuration(object):
@@ -266,7 +285,8 @@ class Configuration(object):
         return {'server_url': self._parsed_config.get('openshift', 'server_url'),
                 'username'  : self._parsed_config.get('openshift', 'username'),
                 'password'  : self._parsed_config.get('openshift', 'password'),
-                'domain'    : self._parsed_config.get(self.isv, 'openshift_domain')}
+                'domain'    : self._parsed_config.get(self.isv, 'openshift_domain'),
+                'app_name'  : self._parsed_config.get(self.isv, 'openshift_app')}
 
     @property
     def aws_conf(self):
@@ -370,6 +390,12 @@ def main():
             print 'AWS bucket "{0}" looks OK'.format(aws.bucket)
         except Exception as e:
             logging.error('Failed to verify AWS bucket: {0}'.format(e))
+            status = False
+        try:
+            openshift.verify_app()
+            print 'Openshift app "{0}" looks OK'.format(openshift.app_name)
+        except Exception as e:
+            logging.error('Failed to verify Openshift app: {0}'.format(e))
             status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)

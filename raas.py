@@ -14,6 +14,7 @@ from boto.s3.key import Key
 from ConfigParser import ConfigParser
 from git import Repo
 from glob import glob
+from shutil import rmtree
 from tempfile import mkdtemp, NamedTemporaryFile
 from urlparse import urlsplit
 
@@ -248,6 +249,10 @@ class Openshift(object):
         if r_json['status'] != 'ok':
             raise Exception('Domain "{0}" not found'.format(self.domain))
 
+    def cleanup(self):
+        if self._app_local_dir:
+            rmtree(self._app_local_dir)
+
 
 class Configuration(object):
     """Configuration and utilities"""
@@ -396,29 +401,31 @@ def main():
     if args.action in 'status':
         status = True
         try:
-            openshift.verify_domain()
-            print 'Openshift domain "{0}" looks OK'.format(openshift.domain)
-        except Exception as e:
-            logging.error('Failed to verify Openshift domain: {0}'.format(e))
-            status = False
-        try:
             aws.verify_bucket()
             print 'AWS bucket "{0}" looks OK'.format(aws.bucket)
         except Exception as e:
             logging.error('Failed to verify AWS bucket: {0}'.format(e))
             status = False
         try:
-            openshift.app_data
-            print 'Openshift app "{0}" looks OK'.format(openshift.app_name)
+            openshift.verify_domain()
+            print 'Openshift domain "{0}" looks OK'.format(openshift.domain)
         except Exception as e:
-            logging.error('Failed to verify Openshift app: {0}'.format(e))
+            logging.error('Failed to verify Openshift domain: {0}'.format(e))
             status = False
-        try:
-            openshift.clone_app()
-            print 'Cloned Openshift app "{0}" to "{1}"'.format(openshift.app_name, openshift.app_local_dir)
-        except Exception as e:
-            logging.error('Failed to clone Openshift app: {0}'.format(e))
-            status = False
+        if status:
+            try:
+                openshift.app_data
+                print 'Openshift app "{0}" looks OK'.format(openshift.app_name)
+            except Exception as e:
+                logging.error('Failed to verify Openshift app: {0}'.format(e))
+                status = False
+        if status:
+            try:
+                openshift.clone_app()
+                print 'Cloned Openshift app "{0}" to "{1}"'.format(openshift.app_name, openshift.app_local_dir)
+            except Exception as e:
+                logging.error('Failed to clone Openshift app: {0}'.format(e))
+                status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)
 
@@ -446,6 +453,9 @@ def main():
 
     if not args.nocommit:
         config.commit_all_changes()
+
+    openshift.cleanup()
+
 
 if __name__ == '__main__':
     main()

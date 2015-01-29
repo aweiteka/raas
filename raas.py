@@ -74,12 +74,28 @@ class PulpTar(object):
 
 
 class AwsS3(object):
-    """Interactions with AWS S3"""
-    def __init__(self, **kwargs):
-        self.bucket = kwargs['bucket_name']
-        self.app = kwargs['app_name']
-        self.images_dir = kwargs['images_dir']
-        self.mask_layers = kwargs['mask_layers']
+    """Interact with AWS S3"""
+
+    def __init__(self, bucket):
+        self._bucket = bucket
+        self._connect()
+        #self.bucket = kwargs['bucket_name']
+        #self.app = kwargs['app_name']
+        #self.images_dir = kwargs['images_dir']
+        #self.mask_layers = kwargs['mask_layers']
+
+    @property
+    def bucket(self):
+        return self._bucket
+
+    def _connect(self):
+        logging.info('Connecting to AWS')
+        self._conn = connect_s3()
+
+    def verify_bucket(self):
+        logging.info('Looking up bucket: {0}'.format(self._bucket))
+        if not self._conn.lookup(self._bucket):
+            raise Exception('Bucket not found: {0}'.format(self._bucket))
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -252,6 +268,10 @@ class Configuration(object):
                 'password'  : self._parsed_config.get('openshift', 'password'),
                 'domain'    : self._parsed_config.get(self.isv, 'openshift_domain')}
 
+    @property
+    def aws_conf(self):
+        return {'bucket': self._parsed_config.get(self.isv, 's3_bucket')}
+
     def _git_clone(self, repo_url):
         """Clone repo using GitPython"""
         logging.info('Clonning git repo to: {0}'.format(self._conf_dir))
@@ -289,7 +309,7 @@ class Configuration(object):
             self._parsed_config.add_section(self.isv)
             self._parsed_config.set(self.isv, 'openshift_domain', self.isv)
             self._parsed_config.set(self.isv, 'openshift_app', 'registry')
-            self._parsed_config.set(self.isv, 's3_bucket', None)
+            self._parsed_config.set(self.isv, 's3_bucket', self.isv + '.bucket')
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)
 
@@ -330,6 +350,12 @@ def main():
     except Exception as e:
         logging.critical('Failed to initialize Openshift: {0}'.format(e))
         sys.exit(1)
+    
+    try:
+        aws = AwsS3(**config.aws_conf)
+    except Exception as e:
+        logging.critical('Failed to initialize AWS: {0}'.format(e))
+        sys.exit(1)
 
     if args.action in 'status':
         status = True
@@ -338,6 +364,12 @@ def main():
             print 'Openshift domain "{0}" looks OK'.format(openshift.domain)
         except Exception as e:
             logging.error('Failed to verify Openshift domain: {0}'.format(e))
+            status = False
+        try:
+            aws.verify_bucket()
+            print 'AWS bucket "{0}" looks OK'.format(aws.bucket)
+        except Exception as e:
+            logging.error('Failed to verify AWS bucket: {0}'.format(e))
             status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)

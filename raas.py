@@ -134,6 +134,9 @@ class Openshift(object):
     """Interact with Openshift REST API"""
 
     def __init__(self, server_url, username, password, domain, app_name):
+        self._app_data = None
+        self._app_local_dir = None
+        self._app_repo = None
         self._server_url = server_url
         self._username = username
         self._password = password
@@ -142,7 +145,6 @@ class Openshift(object):
         #self.app_git_url = kwargs['app_git_url']
         #self.cartridge = kwargs['cartridge']
         # FIXME:
-        self.app_data = None
         #self.cranefile = cranefile
 
     @property
@@ -152,6 +154,31 @@ class Openshift(object):
     @property
     def app_name(self):
         return self._app_name
+
+    @property
+    def app_local_dir(self):
+        if not self._app_local_dir:
+            self._app_local_dir = mkdtemp()
+            logging.info('Created local Openshift app dir "{0}"'.format(self._app_local_dir))
+        return self._app_local_dir
+
+    @property
+    def app_data(self):
+        if not self._app_data:
+            url = '{0}/broker/rest/domain/{1}/applications'.format(self._server_url, self.domain)
+            logging.info('Getting Openshift app data for "{0}"'.format(self.app_name))
+            r_json = self._call_openshift(url)
+            if r_json['status'] != 'ok':
+                raise Exception('Failed to get applications in domain "{0}"'.format(self.domain))
+            for app in r_json['data']:
+                logging.info('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
+                if app['name'] == self.app_name:
+                    logging.info('Found Openshift app "{0}" with ID "{1}"'.format(self.app_name, app['id']))
+                    self._app_data = app
+                    break
+            else:
+                raise Exception('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
+        return self._app_data
 
     @property
     def _env_vars(self):
@@ -193,6 +220,10 @@ class Openshift(object):
                        'value': var[1]}
             self._call_openshift(url, 'post', payload)
 
+    def clone_app(self):
+        logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
+        self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
+
     def create_app(self):
         """Create an Openshift application"""
         payload = {'name': self.app_name,
@@ -216,21 +247,6 @@ class Openshift(object):
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
             raise Exception('Domain "{0}" not found'.format(self.domain))
-
-    def verify_app(self):
-        """Verify that Openshift app exists"""
-        url = '{0}/broker/rest/domain/{1}/applications'.format(self._server_url, self.domain)
-        logging.info('Verifying Openshift app "{0}"'.format(self.app_name))
-        r_json = self._call_openshift(url)
-        if r_json['status'] != 'ok':
-            raise Exception('Failed to get applications in domain "{0}"'.format(self.domain))
-        for app in r_json['data']:
-            logging.info('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
-            if app['name'] == self.app_name:
-                logging.info('Found Openshift app "{0}" with ID "{1}"'.format(self.app_name, app['id']))
-                break
-        else:
-            raise Exception('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
 
 
 class Configuration(object):
@@ -392,10 +408,16 @@ def main():
             logging.error('Failed to verify AWS bucket: {0}'.format(e))
             status = False
         try:
-            openshift.verify_app()
+            openshift.app_data
             print 'Openshift app "{0}" looks OK'.format(openshift.app_name)
         except Exception as e:
             logging.error('Failed to verify Openshift app: {0}'.format(e))
+            status = False
+        try:
+            openshift.clone_app()
+            print 'Cloned Openshift app "{0}" to "{1}"'.format(openshift.app_name, openshift.app_local_dir)
+        except Exception as e:
+            logging.error('Failed to clone Openshift app: {0}'.format(e))
             status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)

@@ -117,12 +117,13 @@ class AwsS3(object):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, **kwargs):
-        self._server_url = kwargs['server_url']
-        self._username = kwargs['username']
-        self._password = kwargs['password']
-        self.app_git_url = kwargs['app_git_url']
-        self.cartridge = kwargs['cartridge']
+    def __init__(self, server_url, username, password, domain):
+        self._server_url = server_url
+        self._username = username
+        self._password = password
+        self._domain = domain
+        #self.app_git_url = kwargs['app_git_url']
+        #self.cartridge = kwargs['cartridge']
         # FIXME:
         self.app_name = 'registry'
         self.app_data = None
@@ -131,11 +132,6 @@ class Openshift(object):
     @property
     def domain(self):
         return self._domain
-
-    @domain.setter
-    def domain(self, val):
-        self._domain = val
-        logging.debug('Domain set to {0}'.format(self.domain))
 
     @property
     def _env_vars(self):
@@ -250,8 +246,11 @@ class Configuration(object):
         logging.debug('ISV set to {0}'.format(self.isv))
 
     @property
-    def parsed_config(self):
-        return self._parsed_config
+    def openshift_conf(self):
+        return {'server_url': self._parsed_config.get('openshift', 'server_url'),
+                'username'  : self._parsed_config.get('openshift', 'username'),
+                'password'  : self._parsed_config.get('openshift', 'password'),
+                'domain'    : self._parsed_config.get(self.isv, 'openshift_domain')}
 
     def _git_clone(self, repo_url):
         """Clone repo using GitPython"""
@@ -285,14 +284,14 @@ class Configuration(object):
 
     def _setup_isv_config_file(self):
         """Setup config file defaults if not provided"""
-        if not self.parsed_config.has_section(self.isv):
+        if not self._parsed_config.has_section(self.isv):
             logging.info('Creating default ISV section in config file')
-            self.parsed_config.add_section(self.isv)
-            self.parsed_config.set(self.isv, 'openshift_domain', self.isv)
-            self.parsed_config.set(self.isv, 'openshift_app', 'registry')
-            self.parsed_config.set(self.isv, 's3_bucket', None)
+            self._parsed_config.add_section(self.isv)
+            self._parsed_config.set(self.isv, 'openshift_domain', self.isv)
+            self._parsed_config.set(self.isv, 'openshift_app', 'registry')
+            self._parsed_config.set(self.isv, 's3_bucket', None)
             with open(self._conf_file, 'w') as configfile:
-                self.parsed_config.write(configfile)
+                self._parsed_config.write(configfile)
 
 
 def main():
@@ -327,8 +326,7 @@ def main():
         sys.exit(1)
 
     try:
-        openshift = Openshift(**config.parsed_config._sections['openshift'])
-        openshift.domain = config.isv
+        openshift = Openshift(**config.openshift_conf)
     except Exception as e:
         logging.critical('Failed to initialize Openshift: {0}'.format(e))
         sys.exit(1)

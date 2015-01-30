@@ -18,6 +18,42 @@ from shutil import rmtree
 from tempfile import mkdtemp, NamedTemporaryFile
 from urlparse import urlsplit
 
+class PulpServer(object):
+    """Interact with Pulp API"""
+    def __init__(self, server_url, username, password, verify_ssl):
+        self._server_url = server_url
+        self._username = username
+        self._password = password
+        self._verify_ssl = verify_ssl
+
+    def _call_pulp(self, url, req_type='get', payload=None):
+        if req_type == 'get':
+            logging.info('Calling Pulp URL "{0}"'.format(url))
+            r = requests.get(url, auth=(self._username, self._password), verify=self._verify_ssl)
+        elif req_type == 'post':
+            logging.info('Posting to Pulp URL "{0}"'.format(url))
+            r = requests.post(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
+        else:
+            raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
+        r_json = r.json()
+
+        logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
+        logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
+
+        if r_json['error_message']:
+            logging.info('Messages from Pulp response:{0}'.format(r_json['error_message']))
+
+        return r_json
+
+    def verify_repo(self, image):
+        """List pulp repositories"""
+        # FIXME: convert image string to repository string
+        url = '{0}/pulp/api/v2/repositories/{1}/'.format(self._server_url, image)
+        logging.info('Listing Pulp repositories')
+        logging.info('Verifying pulp repository "{0}"'.format(image))
+        r_json = self._call_pulp(url)
+        if r_json['error_message']:
+            raise Exception('Repository "{0}" not found'.format(image))
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -260,13 +296,15 @@ class Configuration(object):
     _CONFIG_FILE_NAME = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
-    def __init__(self, isv):
+    def __init__(self, isv, image=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
         self.isv = isv
+        if image:
+            self.pulp_repo = image
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
@@ -300,6 +338,22 @@ class Configuration(object):
             raise ValueError('ISV "{0}" must contain only alphanumeric characters'.format(val))
         self._isv = val.lower()
         logging.debug('ISV set to "{0}"'.format(self.isv))
+
+    @property
+    def pulp_repo(self):
+        return self._pulp_repo
+
+    @pulp_repo.setter
+    def pulp_repo(self, image):
+        """Returns pulp-friendly repository name without slash"""
+        self._pulp_repo = image.replace("/", "-")
+
+    @property
+    def pulp_conf(self):
+        return {'server_url': self._parsed_config.get('pulpserver', 'host'),
+                'username'  : self._parsed_config.get('pulpserver', 'username'),
+                'password'  : self._parsed_config.get('pulpserver', 'password'),
+                'verify_ssl': self._parsed_config.getboolean('pulpserver', 'verify_ssl')}
 
     @property
     def openshift_conf(self):
@@ -381,7 +435,10 @@ def main():
             logging.basicConfig(level=log_level)
 
     try:
-        config = Configuration(args.isv)
+        if hasattr(args, 'image'):
+            config = Configuration(args.isv, args.image)
+        else:
+            config = Configuration(args.isv)
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
         sys.exit(1)
@@ -434,22 +491,30 @@ def main():
         config.setup_isv_config_file()
 
     elif args.action in 'push':
-        print 'push', args.image
+        try:
+            pulp = PulpServer(**config.pulp_conf)
+        except Exception as e:
+            logging.critical('Failed to initialize Pulp: {0}'.format(e))
+            sys.exit(1)
+        try:
+            pulp.verify_repo(args.image)
+            print 'Pulp repo "{0}" looks OK'.format(args.image)
+        except Exception as e:
+            logging.error('Failed to verify pulp repository: {0}'.format(e))
         #mask_layers = conf_file.get('redhat', 'mask_layers')
         #mask_layers = re.split(',| |\n', mask_layers.strip())
-        #pulp = PulpTar(args.tarfile)
-        #pulp.get_tarfile()
-        #cranefile = pulp.crane_metadata_file
+        #pulptar = PulpTar(args.tarfile)
+        #pulptar.get_tarfile()
+        #cranefile = pulptar.crane_metadata_file
         #kwargs = {'bucket_name': args.bucket_name,
         #          'app_name': args.app_name,
-        #          'images_dir': pulp.docker_images_dir,
+        #          'images_dir': pulptar.docker_images_dir,
         #          'mask_layers': mask_layers}
         #s3 = AwsS3(**kwargs)
-        #files = s3.walk_dir(pulp.docker_images_dir)
+        #files = s3.walk_dir(pulptar.docker_images_dir)
         #s3.upload_layers(files)
         #os = Openshift(**conf_file._sections['openshift'])
         #os.create_app()
-        quit()
 
     if not args.nocommit:
         config.commit_all_changes()

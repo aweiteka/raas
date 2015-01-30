@@ -45,6 +45,12 @@ class PulpServer(object):
 
         return r_json
 
+    @property
+    def status(self):
+        """Return pulp server status"""
+        logging.info('Verifying Pulp server status')
+        return self._call_pulp('{0}/pulp/api/v2/status/'.format(self._server_url))
+
     def verify_repo(self, image):
         """List pulp repositories"""
         # FIXME: convert image string to repository string
@@ -493,6 +499,7 @@ def main():
     elif args.action in 'push':
         try:
             pulp = PulpServer(**config.pulp_conf)
+            pulp.status
         except Exception as e:
             logging.critical('Failed to initialize Pulp: {0}'.format(e))
             sys.exit(1)

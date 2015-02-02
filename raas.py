@@ -25,6 +25,9 @@ class PulpServer(object):
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
+        self._web_distributor = "docker_distributor_web"
+        self._export_distributor = "docker_distributor_export"
+        self._export_dir = "/var/www/pub/docker/web/"
 
     def _call_pulp(self, url, req_type='get', payload=None):
         if req_type == 'get':
@@ -32,7 +35,14 @@ class PulpServer(object):
             r = requests.get(url, auth=(self._username, self._password), verify=self._verify_ssl)
         elif req_type == 'post':
             logging.info('Posting to Pulp URL "{0}"'.format(url))
+            if payload:
+                logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
             r = requests.post(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
+        elif req_type == 'put':
+            logging.info('Putting to Pulp URL "{0}"'.format(url))
+            if payload:
+                logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
+            r = requests.put(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
         r_json = r.json()
@@ -43,6 +53,10 @@ class PulpServer(object):
         if 'error_message' in r_json:
             logging.warn('Error messages from Pulp response:\n{0}'.format(r_json['error_message']))
 
+        if 'spawned_tasks' in r_json:
+            for task in r_json['spawned_tasks']:
+                logging.debug('Checking status of spawned task {0}'.format(task['task_id']))
+                self._call_pulp('{0}/{1}'.format(self._server_url, task['_href']))
         return r_json
 
     @property
@@ -51,15 +65,43 @@ class PulpServer(object):
         logging.info('Verifying Pulp server status')
         return self._call_pulp('{0}/pulp/api/v2/status/'.format(self._server_url))
 
-    def verify_repo(self, image):
-        """List pulp repositories"""
-        # FIXME: convert image string to repository string
-        url = '{0}/pulp/api/v2/repositories/{1}/'.format(self._server_url, image)
-        logging.info('Listing Pulp repositories')
-        logging.info('Verifying pulp repository "{0}"'.format(image))
+    def verify_repo(self, repo_id):
+        """Verify pulp repository exists"""
+        url = '{0}/pulp/api/v2/repositories/{1}/'.format(self._server_url, repo_id)
+        logging.info('Verifying pulp repository "{0}"'.format(repo_id))
         r_json = self._call_pulp(url)
+        logging.debug(r_json)
         if 'error_message' in r_json:
-            raise Exception('Repository "{0}" not found'.format(image))
+            raise Exception('Repository "{0}" not found'.format(repo_id))
+
+    def update_redirect_url(self, repo_id, redirect_url):
+        """Update distributor redirect URL and export file"""
+        # Not working; verified with curl
+        url = '{0}/pulp/api/v2/repositories/{1}/distributors/{2}/'.format(self._server_url, repo_id, self._export_distributor)
+        payload = {
+          "distributor_config": {
+            "redirect-url": redirect_url
+          }
+        }
+        logging.info('Update pulp repository "{0}" URL "{1}"'.format(repo_id, redirect_url))
+        r_json = self._call_pulp(url, "put", payload)
+        if 'error_message' in r_json:
+            raise Exception('Unable to update pulp repo "{0}"'.format(repo_id))
+
+    def export_repo(self, repo_id):
+        """Export pulp repository"""
+        # Not working; verified with curl
+        url = '{0}/pulp/api/v2/repositories/{1}/actions/publish/'.format(self._server_url, repo_id)
+        payload = {
+          "id": self._export_distributor,
+          "override_config": {
+            "export_file": '{0}{1}.tar'.format(self._export_dir, repo_id),
+          }
+        }
+        logging.info('Publishing pulp repository "{0}"'.format(repo_id))
+        r_json = self._call_pulp(url, "post", payload)
+        if 'error_message' in r_json:
+            raise Exception('Unable to publish pulp repo "{0}"'.format(repo_id))
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -301,6 +343,7 @@ class Configuration(object):
 
     _CONFIG_FILE_NAME = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
+    _S3_URL = "https://s3.amazonaws.com"
 
     def __init__(self, isv, image=None):
         """Setup Configuration object.
@@ -351,8 +394,16 @@ class Configuration(object):
 
     @pulp_repo.setter
     def pulp_repo(self, image):
-        """Returns pulp-friendly repository name without slash"""
-        self._pulp_repo = image.replace("/", "-")
+        """Returns pulp-friendly repository name with ISV name and without slash"""
+        img_replace = image.replace("/", "-")
+        self._pulp_repo = '-'.join([self.isv, img_replace])
+
+    @property
+    def pulp_redirect_url(self):
+        """Returns Pulp server redirect URL for S3 bucket"""
+        return '/'.join([self._S3_URL,
+                         self._parsed_config.get(self.isv, 's3_bucket'),
+                         self._parsed_config.get(self.isv, 'openshift_app')])
 
     @property
     def pulp_conf(self):
@@ -504,10 +555,24 @@ def main():
             logging.critical('Failed to initialize Pulp: {0}'.format(e))
             sys.exit(1)
         try:
-            pulp.verify_repo(args.image)
-            print 'Pulp repo "{0}" looks OK'.format(args.image)
+            pulp.verify_repo(config.pulp_repo)
+            print 'Pulp repo "{0}" looks OK'.format(config.pulp_repo)
         except Exception as e:
             logging.error('Failed to verify pulp repository: {0}'.format(e))
+            sys.exit(1)
+        try:
+            pulp.update_redirect_url(config.pulp_repo, config.pulp_redirect_url)
+            print 'Update pulp redirect URL for repo "{0}"'.format(config.pulp_repo)
+        except Exception as e:
+            logging.error('Failed to update pulp repository: {0}'.format(e))
+            sys.exit(1)
+        try:
+            pulp.export_repo(config.pulp_repo)
+            print 'Exporting pulp repo "{0}"'.format(config.pulp_repo)
+        except Exception as e:
+            logging.error('Failed to export pulp repository: {0}'.format(e))
+            sys.exit(1)
+
         #mask_layers = conf_file.get('redhat', 'mask_layers')
         #mask_layers = re.split(',| |\n', mask_layers.strip())
         #pulptar = PulpTar(args.tarfile)

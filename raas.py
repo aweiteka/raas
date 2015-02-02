@@ -161,8 +161,11 @@ class PulpTar(object):
 class AwsS3(object):
     """Interact with AWS S3"""
 
-    def __init__(self, bucket):
-        self._bucket = bucket
+    def __init__(self, bucket_name, app_name):
+        self._bucket = None
+        self._image_ids = set()
+        self._bucket_name = bucket_name
+        self._app_name = app_name
         self._connect()
         #self.bucket = kwargs['bucket_name']
         #self.app = kwargs['app_name']
@@ -170,17 +173,31 @@ class AwsS3(object):
         #self.mask_layers = kwargs['mask_layers']
 
     @property
+    def bucket_name(self):
+        return self._bucket_name
+
+    @property
     def bucket(self):
+        if not self._bucket:
+            self._bucket = self._conn.get_bucket(self._bucket_name)
         return self._bucket
+
+    @property
+    def image_ids(self):
+        if not self._image_ids:
+            for i in self.bucket.list(prefix=self._app_name + '/', delimiter='/'):
+                self._image_ids.add(i.name.split('/')[1])
+            logging.info('AWS image ids: {0}'.format(self._image_ids))
+        return self._image_ids
 
     def _connect(self):
         logging.info('Connecting to AWS')
         self._conn = connect_s3()
 
     def verify_bucket(self):
-        logging.info('Looking up bucket "{0}"'.format(self._bucket))
-        if not self._conn.lookup(self._bucket):
-            raise Exception('Bucket "{0}" not found'.format(self._bucket))
+        logging.info('Looking up bucket "{0}"'.format(self._bucket_name))
+        if not self._conn.lookup(self._bucket_name):
+            raise Exception('Bucket "{0}" not found'.format(self._bucket_name))
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -218,15 +235,17 @@ class AwsS3(object):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, username, password, domain, app_name):
+    def __init__(self, server_url, username, password, domain, app_name, isv_app_name):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
+        self._image_ids = set()
         self._server_url = server_url
         self._username = username
         self._password = password
         self._domain = domain
         self._app_name = app_name
+        self._isv_app_name = isv_app_name
         #self.app_git_url = kwargs['app_git_url']
         #self.cartridge = kwargs['cartridge']
         # FIXME:
@@ -264,6 +283,18 @@ class Openshift(object):
             else:
                 raise Exception('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
         return self._app_data
+
+    @property
+    def image_ids(self):
+        if not self._image_ids:
+            with open(os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')) as f:
+                data = json.load(f)
+            logging.debug('Crane "{0}.json" data:\n{1}'.format(self._isv_app_name, json.dumps(data, indent=2)))
+
+            self._image_ids = [i['id'] for i in data['images']]
+            self._image_ids = set(self._image_ids)
+            logging.info('Crane image IDs: {0}'.format(self._image_ids))
+        return self._image_ids
 
     @property
     def _env_vars(self):
@@ -422,7 +453,7 @@ class Configuration(object):
 
     @property
     def aws_conf(self):
-        return {'bucket': self._parsed_config.get(self.isv, 's3_bucket')}
+        return {'bucket_name': self._parsed_config.get(self.isv, 's3_bucket')}
 
     def _git_clone(self, repo_url):
         """Clone repo using GitPython"""
@@ -471,6 +502,9 @@ def main():
     isv_args = ['isv']
     isv_kwargs = {'metavar': 'ISV_NAME',
                   'help': 'ISV name matching config file and OpenShift Online domain'}
+    isv_app_args = ['isv_app']
+    isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
+                      'help': 'ISV Application name'}
     parser = ArgumentParser()
     parser.add_argument('-l', '--log', metavar='LOG_LEVEL',
             help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
@@ -479,6 +513,7 @@ def main():
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
+    status_parser.add_argument(*isv_app_args, **isv_app_kwargs)
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser = subparsers.add_parser('push', help='Push or update an image')
@@ -501,13 +536,13 @@ def main():
         sys.exit(1)
 
     try:
-        openshift = Openshift(**config.openshift_conf)
+        openshift = Openshift(isv_app_name=args.isv_app, **config.openshift_conf)
     except Exception as e:
         logging.critical('Failed to initialize Openshift: {0}'.format(e))
         sys.exit(1)
-    
+
     try:
-        aws = AwsS3(**config.aws_conf)
+        aws = AwsS3(app_name=args.isv_app, **config.aws_conf)
     except Exception as e:
         logging.critical('Failed to initialize AWS: {0}'.format(e))
         sys.exit(1)
@@ -516,7 +551,7 @@ def main():
         status = True
         try:
             aws.verify_bucket()
-            print 'AWS bucket "{0}" looks OK'.format(aws.bucket)
+            print 'AWS bucket "{0}" looks OK'.format(aws.bucket_name)
         except Exception as e:
             logging.error('Failed to verify AWS bucket: {0}'.format(e))
             status = False
@@ -539,6 +574,12 @@ def main():
                 print 'Cloned Openshift app "{0}" to "{1}"'.format(openshift.app_name, openshift.app_local_dir)
             except Exception as e:
                 logging.error('Failed to clone Openshift app: {0}'.format(e))
+                status = False
+        if status:
+            if openshift.image_ids == aws.image_ids:
+                print 'Openshift Crane images matches AWS images'
+            else:
+                logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
                 status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)

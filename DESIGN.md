@@ -85,8 +85,16 @@ openshift_app = registry
 
 
 [isv2]
-s3_bucket = isv1.bucket
-openshift_domain = isv1
+s3_bucket = isv2.bucket
+openshift_domain = isv2
 openshift_app = registry
 
 ```
+
+## Conventions
+
+* AWS S3 bucket name: ISV determined
+* OpenShift ISV domain name: ISV determined
+* Default OpenShift application name: "registry"
+* AWS S3 images path: `https://s3.amazonaws.com/<isv_bucket_name>/<openshift_app_name>`
+* Pulp repository name: Replace "image/name" with "image-name" and prepend ISV domain, e.g. `<isv_domain>-<image-name>`

@@ -40,8 +40,8 @@ class PulpServer(object):
         logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
         logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
-        if r_json['error_message']:
-            logging.info('Messages from Pulp response:{0}'.format(r_json['error_message']))
+        if 'error_message' in r_json:
+            logging.warn('Error messages from Pulp response:\n{0}'.format(r_json['error_message']))
 
         return r_json
 
@@ -58,7 +58,7 @@ class PulpServer(object):
         logging.info('Listing Pulp repositories')
         logging.info('Verifying pulp repository "{0}"'.format(image))
         r_json = self._call_pulp(url)
-        if r_json['error_message']:
+        if 'error_message' in r_json:
             raise Exception('Repository "{0}" not found'.format(image))
 
 class PulpTar(object):

@@ -631,8 +631,7 @@ def main():
             print 'Status of "{0}" should be OK'.format(config.isv)
 
     elif args.action in 'setup':
-        config.setup_isv_config_dirs()
-        config.setup_isv_config_file()
+        pass
 
     elif args.action in 'push':
         try:

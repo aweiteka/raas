@@ -390,6 +390,17 @@ class Openshift(object):
         if r_json['status'] != 'ok':
             raise Exception('Domain "{0}" not found'.format(self.domain))
 
+    def verify_app(self):
+        url = self.app_data['app_url'] + 'v1/_ping'
+        logging.info('Verifying Crane app status on url "{0}"'.format(url))
+        r = requests.get(url)
+        logging.debug('Crane app HTTP status code: {0}'.format(r.status_code))
+        logging.debug('Crane app response: {0}'.format(r.text))
+        if r.status_code != 200:
+            raise Exception('Crane ping HTTP status code is not "200" but: {0}'.format(r.status_code))
+        if r.text != 'true':
+            raise Exception('Crane ping response is not "true" but: {0}'.format(r.text))
+
     def cleanup(self):
         if self._app_local_dir:
             rmtree(self._app_local_dir)
@@ -611,6 +622,13 @@ def main():
                 print 'Openshift Crane images matches AWS images'
             else:
                 logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
+                status = False
+        if status:
+            try:
+                openshift.verify_app()
+                print 'Openshift Crane app on "{0}" looks alive'.format(openshift.app_data['app_url'])
+            except Exception as e:
+                logging.error('Failed to verify Openshift Crane app: {0}'.format(e))
                 status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)

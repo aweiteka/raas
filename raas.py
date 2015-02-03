@@ -312,7 +312,7 @@ class Openshift(object):
             if r_json['status'] != 'ok':
                 raise Exception('Failed to get applications in domain "{0}"'.format(self.domain))
             for app in r_json['data']:
-                logging.info('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
+                logging.debug('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                 if app['name'] == self.app_name:
                     logging.info('Found Openshift app "{0}" with ID "{1}"'.format(self.app_name, app['id']))
                     self._app_data = app
@@ -327,7 +327,6 @@ class Openshift(object):
             with open(os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')) as f:
                 data = json.load(f)
             logging.debug('Crane "{0}.json" data:\n{1}'.format(self._isv_app_name, json.dumps(data, indent=2)))
-
             self._image_ids = [i['id'] for i in data['images']]
             self._image_ids = set(self._image_ids)
             logging.info('Crane image IDs: {0}'.format(self._image_ids))
@@ -412,9 +411,25 @@ class Openshift(object):
         if r.text != 'true':
             raise Exception('Crane ping response is not "true" but: {0}'.format(r.text))
 
+    def status(self):
+        result = True
+        try:
+            self.verify_domain()
+            print 'Openshift domain "{0}" looks OK'.format(self.domain)
+            self.verify_app()
+            print 'Openshift Crane app on "{0}" looks alive'.format(self.app_data['app_url'])
+            self.clone_app()
+            print 'Cloned Openshift app "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
+        except Exception as e:
+            logging.error('Failed to verify Openshift status: {0}'.format(e))
+            result = False
+        return result
+
     def cleanup(self):
         if self._app_local_dir:
+            logging.info('Removing local Openshift app dir "{0}"'.format(self._app_local_dir))
             rmtree(self._app_local_dir)
+            self._app_local_dir = None
 
 
 class Configuration(object):
@@ -601,38 +616,13 @@ def main():
         status = True
         if not aws.status():
             status = False
-        try:
-            openshift.verify_domain()
-            print 'Openshift domain "{0}" looks OK'.format(openshift.domain)
-        except Exception as e:
-            logging.error('Failed to verify Openshift domain: {0}'.format(e))
+        if not openshift.status():
             status = False
-        if status:
-            try:
-                openshift.app_data
-                print 'Openshift app "{0}" looks OK'.format(openshift.app_name)
-            except Exception as e:
-                logging.error('Failed to verify Openshift app: {0}'.format(e))
-                status = False
-        if status:
-            try:
-                openshift.clone_app()
-                print 'Cloned Openshift app "{0}" to "{1}"'.format(openshift.app_name, openshift.app_local_dir)
-            except Exception as e:
-                logging.error('Failed to clone Openshift app: {0}'.format(e))
-                status = False
         if status:
             if openshift.image_ids == aws.image_ids:
                 print 'Openshift Crane images matches AWS images'
             else:
                 logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
-                status = False
-        if status:
-            try:
-                openshift.verify_app()
-                print 'Openshift Crane app on "{0}" looks alive'.format(openshift.app_data['app_url'])
-            except Exception as e:
-                logging.error('Failed to verify Openshift Crane app: {0}'.format(e))
                 status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)

@@ -324,13 +324,21 @@ class Openshift(object):
     @property
     def image_ids(self):
         if not self._image_ids:
-            with open(os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')) as f:
+            with open(self._isv_app_crane_file) as f:
                 data = json.load(f)
             logging.debug('Crane "{0}.json" data:\n{1}'.format(self._isv_app_name, json.dumps(data, indent=2)))
             self._image_ids = [i['id'] for i in data['images']]
             self._image_ids = set(self._image_ids)
             logging.info('Crane image IDs: {0}'.format(self._image_ids))
         return self._image_ids
+
+    @property
+    def _isv_app_crane_file(self):
+        self.clone_app()
+        filename = os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')
+        if not os.path.isfile(filename):
+            raise Exception('ISV app crane file "{0}" does not exist'.format(filename))
+        return filename
 
     @property
     def _env_vars(self):
@@ -373,8 +381,9 @@ class Openshift(object):
             self._call_openshift(url, 'post', payload)
 
     def clone_app(self):
-        logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
-        self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
+        if not self._app_repo:
+            logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
+            self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
 
     def create_app(self):
         """Create an Openshift application"""
@@ -420,6 +429,8 @@ class Openshift(object):
             print 'Openshift Crane app on "{0}" looks alive'.format(self.app_data['app_url'])
             self.clone_app()
             print 'Cloned Openshift app "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
+            cranefile = self._isv_app_crane_file
+            print 'ISV app crane file "{0}" exists'.format(cranefile)
         except Exception as e:
             logging.error('Failed to verify Openshift status: {0}'.format(e))
             result = False
@@ -619,13 +630,18 @@ def main():
         if not openshift.status():
             status = False
         if status:
-            if openshift.image_ids == aws.image_ids:
-                print 'Openshift Crane images matches AWS images'
-            else:
-                logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
-                status = False
+            try:
+                if openshift.image_ids == aws.image_ids:
+                    print 'Openshift Crane images matches AWS images'
+                else:
+                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
+                    status = False
+            except Exception as e:
+                logging.error('Failed to compare Openshift and AWS images: {0}'.format(e))
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)
+        else:
+            print 'Failed to verify status of "{0}"'.format(config.isv)
 
     elif args.action in 'setup':
         pass

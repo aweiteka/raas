@@ -158,6 +158,32 @@ class PulpTar(object):
                 self.extract_tar(raw_tarfile.name)
 
 
+class RedHatMeta(object):
+    """Information on Red Hat docker images"""
+
+    def __init__(self, git_repo_url, relpath):
+        self._image_ids = set()
+        self._repo_url = git_repo_url
+        self._relpath = relpath
+
+    @property
+    def image_ids(self):
+        if not self._image_ids:
+            tmpdir = mkdtemp()
+            Repo.clone_from(self._repo_url, tmpdir)
+            logging.info('Red Hat meta git cloned to "{0}"'.format(tmpdir))
+            for filename in glob(os.path.join(tmpdir, self._relpath) + os.sep + '*.json'):
+                logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
+                with open(filename) as f:
+                    data = json.load(f)
+                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(filename, json.dumps(data, indent=2)))
+                    for i in data['images']:
+                        self._image_ids.add(i['id'])
+            logging.info('Red Hat image IDs: {0}'.format(self._image_ids))
+            rmtree(tmpdir)
+        return self._image_ids
+
+
 class AwsS3(object):
     """Interact with AWS S3"""
 
@@ -198,6 +224,17 @@ class AwsS3(object):
         logging.info('Looking up bucket "{0}"'.format(self._bucket_name))
         if not self._conn.lookup(self._bucket_name):
             raise Exception('Bucket "{0}" not found'.format(self._bucket_name))
+
+    def status(self):
+        result = True
+        logging.info('Checking AWS status...')
+        try:
+            self.verify_bucket()
+            print 'AWS bucket "{0}" looks OK'.format(self.bucket_name)
+        except Exception as e:
+            logging.error('Failed to verify AWS bucket: {0}'.format(e))
+            result = False
+        return result
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -275,7 +312,7 @@ class Openshift(object):
             if r_json['status'] != 'ok':
                 raise Exception('Failed to get applications in domain "{0}"'.format(self.domain))
             for app in r_json['data']:
-                logging.info('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
+                logging.debug('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                 if app['name'] == self.app_name:
                     logging.info('Found Openshift app "{0}" with ID "{1}"'.format(self.app_name, app['id']))
                     self._app_data = app
@@ -287,14 +324,21 @@ class Openshift(object):
     @property
     def image_ids(self):
         if not self._image_ids:
-            with open(os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')) as f:
+            with open(self._isv_app_crane_file) as f:
                 data = json.load(f)
             logging.debug('Crane "{0}.json" data:\n{1}'.format(self._isv_app_name, json.dumps(data, indent=2)))
-
             self._image_ids = [i['id'] for i in data['images']]
             self._image_ids = set(self._image_ids)
             logging.info('Crane image IDs: {0}'.format(self._image_ids))
         return self._image_ids
+
+    @property
+    def _isv_app_crane_file(self):
+        self.clone_app()
+        filename = os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')
+        if not os.path.isfile(filename):
+            raise Exception('ISV app crane file "{0}" does not exist'.format(filename))
+        return filename
 
     @property
     def _env_vars(self):
@@ -337,8 +381,9 @@ class Openshift(object):
             self._call_openshift(url, 'post', payload)
 
     def clone_app(self):
-        logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
-        self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
+        if not self._app_repo:
+            logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
+            self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
 
     def create_app(self):
         """Create an Openshift application"""
@@ -364,9 +409,38 @@ class Openshift(object):
         if r_json['status'] != 'ok':
             raise Exception('Domain "{0}" not found'.format(self.domain))
 
+    def verify_app(self):
+        url = self.app_data['app_url'] + 'v1/_ping'
+        logging.info('Verifying Crane app status on url "{0}"'.format(url))
+        r = requests.get(url)
+        logging.debug('Crane app HTTP status code: {0}'.format(r.status_code))
+        logging.debug('Crane app response: {0}'.format(r.text))
+        if r.status_code != 200:
+            raise Exception('Crane ping HTTP status code is not "200" but: {0}'.format(r.status_code))
+        if r.text != 'true':
+            raise Exception('Crane ping response is not "true" but: {0}'.format(r.text))
+
+    def status(self):
+        result = True
+        try:
+            self.verify_domain()
+            print 'Openshift domain "{0}" looks OK'.format(self.domain)
+            self.verify_app()
+            print 'Openshift Crane app on "{0}" looks alive'.format(self.app_data['app_url'])
+            self.clone_app()
+            print 'Cloned Openshift app "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
+            cranefile = self._isv_app_crane_file
+            print 'ISV app crane file "{0}" exists'.format(cranefile)
+        except Exception as e:
+            logging.error('Failed to verify Openshift status: {0}'.format(e))
+            result = False
+        return result
+
     def cleanup(self):
         if self._app_local_dir:
+            logging.info('Removing local Openshift app dir "{0}"'.format(self._app_local_dir))
             rmtree(self._app_local_dir)
+            self._app_local_dir = None
 
 
 class Configuration(object):
@@ -376,25 +450,29 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, image=None):
+    def __init__(self, isv, isv_app_name=None, image=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
+        self._pulp_repo = None
         self.isv = isv
+        self._isv_app_name = isv_app_name
         if image:
             self.pulp_repo = image
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
+            logging.info('Using configuration in current dir "{0}"'.format(self._conf_dir))
         else:
             repo_url = os.getenv(self._CONFIG_REPO_ENV_VAR)
             if not repo_url:
                 raise Exception('Current working directory does not contain "{0}" configuration file ' + \
                         'and environment variable "{1}" is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
             self._conf_dir = mkdtemp()
-            self._git_clone(repo_url)
+            logging.info('Clonning config repo from "{0}" to "{1}"'.format(repo_url, self._conf_dir))
+            self._config_repo = Repo.clone_from(repo_url, self._conf_dir)
 
         self._conf_file = os.path.join(self._conf_dir, self._CONFIG_FILE_NAME)
         if not os.path.isfile(self._conf_file):
@@ -402,7 +480,6 @@ class Configuration(object):
         self._parsed_config = ConfigParser()
         self._parsed_config.read(self._conf_file)
 
-        logging.info('Using conf dir "{0}"'.format(self._conf_dir))
         logging.info('Using conf file "{0}"'.format(self._conf_file))
 
         self._setup_isv_config_dirs()
@@ -420,13 +497,17 @@ class Configuration(object):
         logging.debug('ISV set to "{0}"'.format(self.isv))
 
     @property
+    def isv_app_name(self):
+        return self._isv_app_name
+
+    @property
     def pulp_repo(self):
+        """Pulp-friendly repository name with ISV name and without slash"""
         return self._pulp_repo
 
     @pulp_repo.setter
     def pulp_repo(self, image):
-        """Returns pulp-friendly repository name with ISV name and without slash"""
-        img_replace = image.replace("/", "-")
+        img_replace = image.replace('/', '-')
         self._pulp_repo = '-'.join([self.isv, img_replace])
 
     @property
@@ -434,7 +515,7 @@ class Configuration(object):
         """Returns Pulp server redirect URL for S3 bucket"""
         return '/'.join([self._S3_URL,
                          self._parsed_config.get(self.isv, 's3_bucket'),
-                         self._parsed_config.get(self.isv, 'openshift_app')])
+                         self._isv_app_name])
 
     @property
     def pulp_conf(self):
@@ -445,34 +526,27 @@ class Configuration(object):
 
     @property
     def openshift_conf(self):
-        return {'server_url': self._parsed_config.get('openshift', 'server_url'),
-                'username'  : self._parsed_config.get('openshift', 'username'),
-                'password'  : self._parsed_config.get('openshift', 'password'),
-                'domain'    : self._parsed_config.get(self.isv, 'openshift_domain'),
-                'app_name'  : self._parsed_config.get(self.isv, 'openshift_app')}
+        return {'server_url'  : self._parsed_config.get('openshift', 'server_url'),
+                'username'    : self._parsed_config.get('openshift', 'username'),
+                'password'    : self._parsed_config.get('openshift', 'password'),
+                'domain'      : self._parsed_config.get(self.isv, 'openshift_domain'),
+                'app_name'    : self._parsed_config.get(self.isv, 'openshift_app'),
+                'isv_app_name': self._isv_app_name}
 
     @property
     def aws_conf(self):
-        return {'bucket_name': self._parsed_config.get(self.isv, 's3_bucket')}
+        return {'bucket_name': self._parsed_config.get(self.isv, 's3_bucket'),
+                'app_name'   : self._isv_app_name}
 
-    def _git_clone(self, repo_url):
-        """Clone repo using GitPython"""
-        logging.info('Clonning git repo to "{0}"'.format(self._conf_dir))
-        self._config_repo = Repo.clone_from(repo_url, self._conf_dir)
-
-    def _git_add(self, files):
-        self._config_repo._index.add(files)
-
-    def _git_commit(self, message):
-        self._config_repo._index.commit(message)
-
-    def _git_push(self):
-        return self._config_repo.remotes.origin.push()
+    @property
+    def redhat_meta_conf(self):
+        return {'git_repo_url': self._parsed_config.get('redhat', 'metadata_repo'),
+                'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
     def commit_all_changes(self):
-        #self._git_add(FIXME)
-        #self._git_commit(FIXME)
-        #self._git_push()
+        #self._config_repo._index.add(FIXME)
+        #self._config_repo._index.commit(FIXME)
+        #self._config_repo.remotes.origin.push()
         raise NotImplemented()
 
     def _setup_isv_config_dirs(self):
@@ -527,66 +601,50 @@ def main():
             logging.basicConfig(level=log_level)
 
     try:
+        config_kwargs = {}
+        if hasattr(args, 'isv_app'):
+            config_kwargs['isv_app_name'] = args.isv_app
         if hasattr(args, 'image'):
-            config = Configuration(args.isv, args.image)
-        else:
-            config = Configuration(args.isv)
+            config_kwargs['image'] = args.image
+        config = Configuration(args.isv, **config_kwargs)
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
         sys.exit(1)
 
     try:
-        openshift = Openshift(isv_app_name=args.isv_app, **config.openshift_conf)
+        openshift = Openshift(**config.openshift_conf)
     except Exception as e:
         logging.critical('Failed to initialize Openshift: {0}'.format(e))
         sys.exit(1)
 
     try:
-        aws = AwsS3(app_name=args.isv_app, **config.aws_conf)
+        aws = AwsS3(**config.aws_conf)
     except Exception as e:
         logging.critical('Failed to initialize AWS: {0}'.format(e))
         sys.exit(1)
 
     if args.action in 'status':
         status = True
-        try:
-            aws.verify_bucket()
-            print 'AWS bucket "{0}" looks OK'.format(aws.bucket_name)
-        except Exception as e:
-            logging.error('Failed to verify AWS bucket: {0}'.format(e))
+        if not aws.status():
             status = False
-        try:
-            openshift.verify_domain()
-            print 'Openshift domain "{0}" looks OK'.format(openshift.domain)
-        except Exception as e:
-            logging.error('Failed to verify Openshift domain: {0}'.format(e))
+        if not openshift.status():
             status = False
         if status:
             try:
-                openshift.app_data
-                print 'Openshift app "{0}" looks OK'.format(openshift.app_name)
+                if openshift.image_ids == aws.image_ids:
+                    print 'Openshift Crane images matches AWS images'
+                else:
+                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
+                    status = False
             except Exception as e:
-                logging.error('Failed to verify Openshift app: {0}'.format(e))
-                status = False
-        if status:
-            try:
-                openshift.clone_app()
-                print 'Cloned Openshift app "{0}" to "{1}"'.format(openshift.app_name, openshift.app_local_dir)
-            except Exception as e:
-                logging.error('Failed to clone Openshift app: {0}'.format(e))
-                status = False
-        if status:
-            if openshift.image_ids == aws.image_ids:
-                print 'Openshift Crane images matches AWS images'
-            else:
-                logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
-                status = False
+                logging.error('Failed to compare Openshift and AWS images: {0}'.format(e))
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)
+        else:
+            print 'Failed to verify status of "{0}"'.format(config.isv)
 
     elif args.action in 'setup':
-        config.setup_isv_config_dirs()
-        config.setup_isv_config_file()
+        pass
 
     elif args.action in 'push':
         try:

@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-#import re
+import re
 import requests
 import sys
 import tarfile
@@ -25,9 +25,12 @@ class PulpServer(object):
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
-        self._web_distributor = "docker_distributor_web"
-        self._export_distributor = "docker_distributor_export"
+        self._web_distributor = "docker_web_distributor_name_cli"
+        self._export_distributor = "docker_export_distributor_name_cli"
+        self._importer = "docker_importer"
         self._export_dir = "/var/www/pub/docker/web/"
+        self._unit_type_id = "docker_image"
+        self._chunk_size = 1048576 # 1 MB per upload call
 
     def _call_pulp(self, url, req_type='get', payload=None):
         if req_type == 'get':
@@ -37,15 +40,21 @@ class PulpServer(object):
             logging.info('Posting to Pulp URL "{0}"'.format(url))
             if payload:
                 logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
-            r = requests.post(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
+            r = requests.post(url, auth=(self._username, self._password), data=json.dumps(payload), verify=self._verify_ssl)
         elif req_type == 'put':
             logging.info('Putting to Pulp URL "{0}"'.format(url))
             if payload:
                 logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
-            r = requests.put(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
+            r = requests.put(url, auth=(self._username, self._password), data=json.dumps(payload), verify=self._verify_ssl)
+        elif req_type == 'delete':
+            logging.info('Delete call to Pulp URL "{0}"'.format(url))
+            r = requests.delete(url, auth=(self._username, self._password), verify=self._verify_ssl)
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
         r_json = r.json()
+        # some requests return null
+        if not r_json:
+            return r_json
 
         logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
         logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
@@ -70,13 +79,48 @@ class PulpServer(object):
         url = '{0}/pulp/api/v2/repositories/{1}/'.format(self._server_url, repo_id)
         logging.info('Verifying pulp repository "{0}"'.format(repo_id))
         r_json = self._call_pulp(url)
-        logging.debug(r_json)
         if 'error_message' in r_json:
             raise Exception('Repository "{0}" not found'.format(repo_id))
 
+    def is_repo(self, repo_id):
+        """Return true if repo exists"""
+        url = '{0}/pulp/api/v2/repositories/'.format(self._server_url)
+        logging.info('Verifying pulp repository "{0}"'.format(repo_id))
+        r_json = self._call_pulp(url)
+        return repo_id in [repo['id'] for repo in r_json]
+
+    def create_repo(self, isv, image, repo_id):
+        """Create pulp docker repository"""
+        payload = {
+        'id': repo_id,
+        'display_name': '%s %s' % (isv, image),
+        'description': 'docker image repository for ISV %s' % isv,
+        'notes': {
+            '_repo-type': 'docker-repo'
+        },
+        'importer_type_id': self._importer,
+        'importer_config': {},
+        'distributors': [{
+            'distributor_type_id': 'docker_distributor_web',
+            'distributor_id': self._web_distributor,
+            'repo-registry-id': image,
+            'auto_publish': 'true'},
+            {
+            'distributor_type_id': 'docker_distributor_export',
+            'distributor_id': self._export_distributor,
+            'repo-registry-id': image,
+            'docker_publish_directory': self._export_dir,
+            'auto_publish': 'true'}
+            ]
+        }
+        url = '{0}/pulp/api/v2/repositories/'.format(self._server_url)
+        logging.info('Verifying pulp repository "{0}"'.format(repo_id))
+        r_json = self._call_pulp(url, "post", payload)
+        if 'error_message' in r_json:
+            raise Exception('Failed to create repository "{0}"'.format(repo_id))
+
     def update_redirect_url(self, repo_id, redirect_url):
         """Update distributor redirect URL and export file"""
-        # Not working; verified with curl
         url = '{0}/pulp/api/v2/repositories/{1}/distributors/{2}/'.format(self._server_url, repo_id, self._export_distributor)
         payload = {
           "distributor_config": {
@@ -88,9 +132,67 @@ class PulpServer(object):
         if 'error_message' in r_json:
             raise Exception('Unable to update pulp repo "{0}"'.format(repo_id))
 
+    @property
+    def _upload_id(self):
+        """Get a pulp upload ID"""
+        url = '{0}/pulp/api/v2/content/uploads/'.format(self._server_url)
+        r_json = self._call_pulp(url, "post")
+        if 'error_message' in r_json:
+            raise Exception('Unable to get a pulp upload ID')
+        return r_json['upload_id']
+
+    def _delete_upload_id(self, upload_id):
+        """Delete upload request ID"""
+        logging.info('Deleting pulp upload ID {0}'.format(upload_id))
+        url = '{0}/pulp/api/v2/content/uploads/{1}/'.format(self._server_url, upload_id)
+        self._call_pulp(url, "delete")
+
+    def upload_image(self, repo_id, file_upload):
+        """Upload image to pulp repository"""
+        if not os.path.isfile(file_upload):
+            raise Exception('Cannot find file "{0}"'.format(file_upload))
+        else:
+            upload_id = self._upload_id
+            logging.info('Uploading image using ID "{0}"'.format(upload_id))
+            self._upload_bits(upload_id, file_upload)
+            self._import_upload()
+            self._delete_upload_id(upload_id)
+
+    def _upload_bits(self, upload_id, file_upload):
+        logging.info('Uploading file ({0})'.format(file_upload))
+        offset = 0
+        source_file_size = os.path.getsize(file_upload)
+        f = open(file_upload, 'r')
+        while True:
+            f.seek(offset)
+            data = f.read(self._chunk_size)
+            if not data:
+                break
+            url = '{0}/pulp/api/v2/content/uploads/{1}/{2}/'.format(self._server_url, upload_id, offset)
+            logging.info('Uploading {0}: {1} of {2} bytes'.format(file_upload, offset, source_file_size))
+            #FIXME: broken call
+            # ERROR:root:Failed to upload image to Pulp: 'utf8' codec can't decode byte 0xc8 in position 41475: invalid continuation byte
+            #self._call_pulp(url, "put", data)
+            offset = min(offset + self._chunk_size, source_file_size)
+        f.close()
+
+    def _import_upload(self, upload_id, repo_id):
+        """Import uploaded content"""
+        logging.info('Importing pulp upload {0} into {1}'.format(upload_id, repo_id))
+        url = '{0}/pulp/api/v2/repositories/{1}/actions/import_upload/'.format(self._server_url, repo_id)
+        payload = {
+          'upload_id': upload_id,
+          'unit_type_id': self._unit_type_id,
+          'unit_key': None,
+          'unit_metadata': None,
+          'override_config': None
+        }
+        r_json = self._call_pulp(url, "post", payload)
+        if 'error_message' in r_json:
+            raise Exception('Unable to import pulp content into {0}'.format(repo_id))
+
     def export_repo(self, repo_id):
         """Export pulp repository"""
-        # Not working; verified with curl
         url = '{0}/pulp/api/v2/repositories/{1}/actions/publish/'.format(self._server_url, repo_id)
         payload = {
           "id": self._export_distributor,
@@ -450,7 +552,7 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, isv_app_name=None, image=None):
+    def __init__(self, isv, isv_app_name=None, image=None, file_upload=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -461,6 +563,13 @@ class Configuration(object):
         self._isv_app_name = isv_app_name
         if image:
             self.pulp_repo = image
+        elif file_upload:
+            if not ".tar" in file_upload:
+                raise Exception('Uploaded file must be output of "docker save some/image > some-image.tar"')
+            else:
+                strip_tar = re.sub('\.tar$', '', file_upload)
+                self.pulp_repo = strip_tar
+                self.image = strip_tar.replace('-', '/')
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
@@ -590,6 +699,8 @@ def main():
     status_parser.add_argument(*isv_app_args, **isv_app_kwargs)
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
+    setup_parser.add_argument('-f', '--file_upload', metavar='IMAGE-NAME.TAR',
+            help='File to upload to pulp server. Output of of "docker save some/image > image-name.tar". This does not setup rest of the environment.')
     push_parser = subparsers.add_parser('push', help='Push or update an image')
     push_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
@@ -606,6 +717,8 @@ def main():
             config_kwargs['isv_app_name'] = args.isv_app
         if hasattr(args, 'image'):
             config_kwargs['image'] = args.image
+        if hasattr(args, 'file_upload'):
+            config_kwargs['file_upload'] = args.file_upload
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
@@ -644,7 +757,30 @@ def main():
             print 'Failed to verify status of "{0}"'.format(config.isv)
 
     elif args.action in 'setup':
-        pass
+        if args.file_upload:
+            # special case to create repo if not exists and upload file to pulp server
+            try:
+                pulp = PulpServer(**config.pulp_conf)
+                pulp.status
+            except Exception as e:
+                logging.critical('Failed to initialize Pulp: {0}'.format(e))
+                sys.exit(1)
+            if not pulp.is_repo(config.pulp_repo):
+                try:
+                    pulp.create_repo(config.isv, config.image, config.pulp_repo)
+                except Exception as e:
+                    logging.critical('Failed to create Pulp repository: {0}'.format(e))
+                    sys.exit(1)
+            else:
+                logging.info('Pulp repository "{0}" already exists'.format(config.pulp_repo))
+            try:
+                pulp.upload_image(config.pulp_repo, args.file_upload)
+                print 'Uploaded image to pulp repo "{0}"'.format(config.pulp_repo)
+            except Exception as e:
+                logging.error('Failed to upload image to Pulp: {0}'.format(e))
+                sys.exit(1)
+
+            sys.exit(1)
 
     elif args.action in 'push':
         try:

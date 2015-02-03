@@ -158,6 +158,32 @@ class PulpTar(object):
                 self.extract_tar(raw_tarfile.name)
 
 
+class RedHatMeta(object):
+    """Information on Red Hat docker images"""
+
+    def __init__(self, git_repo_url, relpath):
+        self._image_ids = set()
+        self._repo_url = git_repo_url
+        self._relpath = relpath
+
+    @property
+    def image_ids(self):
+        if not self._image_ids:
+            tmpdir = mkdtemp()
+            Repo.clone_from(self._repo_url, tmpdir)
+            logging.info('Red Hat meta git cloned to "{0}"'.format(tmpdir))
+            for filename in glob(os.path.join(tmpdir, self._relpath) + os.sep + '*.json'):
+                logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
+                with open(filename) as f:
+                    data = json.load(f)
+                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(filename, json.dumps(data, indent=2)))
+                    for i in data['images']:
+                        self._image_ids.add(i['id'])
+            logging.info('Red Hat image IDs: {0}'.format(self._image_ids))
+            rmtree(tmpdir)
+        return self._image_ids
+
+
 class AwsS3(object):
     """Interact with AWS S3"""
 
@@ -454,6 +480,11 @@ class Configuration(object):
     @property
     def aws_conf(self):
         return {'bucket_name': self._parsed_config.get(self.isv, 's3_bucket')}
+
+    @property
+    def redhat_meta_conf(self):
+        return {'git_repo_url': self._parsed_config.get('redhat', 'metadata_repo'),
+                'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
     def _git_clone(self, repo_url):
         """Clone repo using GitPython"""

@@ -225,6 +225,17 @@ class AwsS3(object):
         if not self._conn.lookup(self._bucket_name):
             raise Exception('Bucket "{0}" not found'.format(self._bucket_name))
 
+    def status(self):
+        result = True
+        logging.info('Checking AWS status...')
+        try:
+            self.verify_bucket()
+            print 'AWS bucket "{0}" looks OK'.format(self.bucket_name)
+        except Exception as e:
+            logging.error('Failed to verify AWS bucket: {0}'.format(e))
+            result = False
+        return result
+
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
         s3 = connect_s3()
@@ -588,11 +599,7 @@ def main():
 
     if args.action in 'status':
         status = True
-        try:
-            aws.verify_bucket()
-            print 'AWS bucket "{0}" looks OK'.format(aws.bucket_name)
-        except Exception as e:
-            logging.error('Failed to verify AWS bucket: {0}'.format(e))
+        if not aws.status():
             status = False
         try:
             openshift.verify_domain()

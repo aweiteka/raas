@@ -292,8 +292,6 @@ class AwsS3(object):
         self._bucket_name = bucket_name
         self._app_name = app_name
         self._connect()
-        #self.bucket = kwargs['bucket_name']
-        #self.app = kwargs['app_name']
         #self.images_dir = kwargs['images_dir']
         #self.mask_layers = kwargs['mask_layers']
 
@@ -413,7 +411,7 @@ class Openshift(object):
     @property
     def app_data(self):
         if not self._app_data:
-            url = '{0}/broker/rest/domain/{1}/applications'.format(self._server_url, self.domain)
+            url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Getting Openshift app data for "{0}"'.format(self.app_name))
             r_json = self._call_openshift(url)
             if r_json['status'] != 'ok':
@@ -454,6 +452,7 @@ class Openshift(object):
                 ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
 
     def _call_openshift(self, url, req_type='get', payload=None):
+        url = '{0}/{1}'.format(self._server_url, url)
         if req_type == 'get':
             logging.info('Calling Openshift URL "{0}"'.format(url))
             r = requests.get(url, auth=(self._username, self._password))
@@ -498,7 +497,7 @@ class Openshift(object):
                    'cartridge': self.cartridge,
                    #'scale': True,
                    'initial_git_url': self.app_git_url}
-        url = self._server_url + '/broker/rest/domains/' + self.domain + '/applications'
+        url = 'broker/rest/domains/' + self.domain + '/applications'
         logging.info('Creating OpenShift application')
         text = self._call_openshift(url, 'post', payload)
         logging.info('Created app "{0}"'.format(self.app_name))
@@ -510,7 +509,7 @@ class Openshift(object):
 
     def verify_domain(self):
         """Verify that Openshift domain exists"""
-        url = '{0}/broker/rest/domains/{1}'.format(self._server_url, self.domain)
+        url = 'broker/rest/domains/{0}'.format(self.domain)
         logging.info('Verifying Openshift domain "{0}"'.format(self.domain))
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
@@ -542,6 +541,18 @@ class Openshift(object):
             logging.error('Failed to verify Openshift status: {0}'.format(e))
             result = False
         return result
+
+    def create_domain(self):
+        try:
+            self.verify_domain()
+            logging.info('Openshift domain "{0}" already exists'.format(self.domain))
+        except Exception:
+            url = 'broker/rest/domains'
+            payload = {'name': self.domain}
+            logging.info('Creating Openshift domain "{0}"'.format(self.domain))
+            r_json = self._call_openshift(url, 'post', payload)
+            if r_json['status'] != 'created':
+                raise Exception('Domain "{0}" could not be created'.format(self.domain))
 
     def cleanup(self):
         if self._app_local_dir:

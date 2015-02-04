@@ -42,10 +42,9 @@ class PulpServer(object):
                 logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
             r = requests.post(url, auth=(self._username, self._password), data=json.dumps(payload), verify=self._verify_ssl)
         elif req_type == 'put':
+            # some calls pass in binary data so we don't log payload data or json encode it here
             logging.info('Putting to Pulp URL "{0}"'.format(url))
-            if payload:
-                logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
-            r = requests.put(url, auth=(self._username, self._password), data=json.dumps(payload), verify=self._verify_ssl)
+            r = requests.put(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
         elif req_type == 'delete':
             logging.info('Delete call to Pulp URL "{0}"'.format(url))
             r = requests.delete(url, auth=(self._username, self._password), verify=self._verify_ssl)
@@ -128,7 +127,7 @@ class PulpServer(object):
           }
         }
         logging.info('Update pulp repository "{0}" URL "{1}"'.format(repo_id, redirect_url))
-        r_json = self._call_pulp(url, "put", payload)
+        r_json = self._call_pulp(url, "put", json.dumps(payload))
         if 'error_message' in r_json:
             raise Exception('Unable to update pulp repo "{0}"'.format(repo_id))
 
@@ -155,7 +154,7 @@ class PulpServer(object):
             upload_id = self._upload_id
             logging.info('Uploading image using ID "{0}"'.format(upload_id))
             self._upload_bits(upload_id, file_upload)
-            self._import_upload()
+            self._import_upload(upload_id, repo_id)
             self._delete_upload_id(upload_id)
 
     def _upload_bits(self, upload_id, file_upload):
@@ -170,9 +169,7 @@ class PulpServer(object):
                 break
             url = '{0}/pulp/api/v2/content/uploads/{1}/{2}/'.format(self._server_url, upload_id, offset)
             logging.info('Uploading {0}: {1} of {2} bytes'.format(file_upload, offset, source_file_size))
-            #FIXME: broken call
-            # ERROR:root:Failed to upload image to Pulp: 'utf8' codec can't decode byte 0xc8 in position 41475: invalid continuation byte
-            #self._call_pulp(url, "put", data)
+            self._call_pulp(url, "put", data)
             offset = min(offset + self._chunk_size, source_file_size)
         f.close()
 

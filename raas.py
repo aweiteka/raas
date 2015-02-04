@@ -335,6 +335,14 @@ class AwsS3(object):
             result = False
         return result
 
+    def create_bucket(self):
+        try:
+            self.verify_bucket()
+            logging.info('Bucket "{0}" already exists'.format(self.bucket_name))
+        except Exception:
+            logging.info('Creating bucket "{0}"'.format(self.bucket_name))
+            self._conn.create_bucket(self.bucket_name)
+
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
         s3 = connect_s3()

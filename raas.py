@@ -776,7 +776,8 @@ def main():
                 if openshift.image_ids == aws.image_ids:
                     print 'Openshift Crane images matches AWS images'
                 else:
-                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
+                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
+                                  .format(openshift.image_ids, aws.image_ids))
                     status = False
             except Exception as e:
                 logging.error('Failed to compare Openshift and AWS images: {0}'.format(e))
@@ -786,19 +787,26 @@ def main():
             print 'Failed to verify status of "{0}"'.format(config.isv)
 
     elif args.action in 'setup':
-        if args.file_upload:
+        if not args.file_upload:
+            try:
+                aws.create_bucket()
+                openshift.create_domain()
+                openshift.create_app()
+            except Exception as e:
+                logging.error('Failed to setup ISV: {0}'.format(e))
+        else:
             # special case to create repo if not exists and upload file to pulp server
             try:
                 pulp = PulpServer(**config.pulp_conf)
                 pulp.status
             except Exception as e:
-                logging.critical('Failed to initialize Pulp: {0}'.format(e))
+                logging.error('Failed to initialize Pulp: {0}'.format(e))
                 sys.exit(1)
             if not pulp.is_repo(config.pulp_repo):
                 try:
                     pulp.create_repo(config.isv, config.image, config.pulp_repo)
                 except Exception as e:
-                    logging.critical('Failed to create Pulp repository: {0}'.format(e))
+                    logging.error('Failed to create Pulp repository: {0}'.format(e))
                     sys.exit(1)
             else:
                 logging.info('Pulp repository "{0}" already exists'.format(config.pulp_repo))
@@ -808,8 +816,6 @@ def main():
             except Exception as e:
                 logging.error('Failed to upload image to Pulp: {0}'.format(e))
                 sys.exit(1)
-
-            sys.exit(1)
 
     elif args.action in 'push':
         try:

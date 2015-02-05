@@ -292,8 +292,6 @@ class AwsS3(object):
         self._bucket_name = bucket_name
         self._app_name = app_name
         self._connect()
-        #self.bucket = kwargs['bucket_name']
-        #self.app = kwargs['app_name']
         #self.images_dir = kwargs['images_dir']
         #self.mask_layers = kwargs['mask_layers']
 
@@ -335,6 +333,14 @@ class AwsS3(object):
             result = False
         return result
 
+    def create_bucket(self):
+        try:
+            self.verify_bucket()
+            logging.info('Bucket "{0}" already exists'.format(self.bucket_name))
+        except Exception:
+            logging.info('Creating bucket "{0}"'.format(self.bucket_name))
+            self._conn.create_bucket(self.bucket_name)
+
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
         s3 = connect_s3()
@@ -371,7 +377,8 @@ class AwsS3(object):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, username, password, domain, app_name, isv_app_name):
+    def __init__(self, server_url, username, password, domain, app_name,
+                 app_git_url, cartridge, isv_app_name):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
@@ -381,11 +388,9 @@ class Openshift(object):
         self._password = password
         self._domain = domain
         self._app_name = app_name
+        self._app_git_url = app_git_url
+        self._cartridge = cartridge
         self._isv_app_name = isv_app_name
-        #self.app_git_url = kwargs['app_git_url']
-        #self.cartridge = kwargs['cartridge']
-        # FIXME:
-        #self.cranefile = cranefile
 
     @property
     def domain(self):
@@ -405,7 +410,7 @@ class Openshift(object):
     @property
     def app_data(self):
         if not self._app_data:
-            url = '{0}/broker/rest/domain/{1}/applications'.format(self._server_url, self.domain)
+            url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Getting Openshift app data for "{0}"'.format(self.app_name))
             r_json = self._call_openshift(url)
             if r_json['status'] != 'ok':
@@ -446,6 +451,8 @@ class Openshift(object):
                 ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
 
     def _call_openshift(self, url, req_type='get', payload=None):
+        if not url.startswith(self._server_url):
+            url = '{0}/{1}'.format(self._server_url, url)
         if req_type == 'get':
             logging.info('Calling Openshift URL "{0}"'.format(url))
             r = requests.get(url, auth=(self._username, self._password))
@@ -467,42 +474,32 @@ class Openshift(object):
 
         return r_json
 
-    def _restart_app(self):
-        logging.info('Restarting application')
-        payload = {'event': 'restart'}
-        self._call_openshift(self.app_data['links']['RESTART']['href'], 'post', payload)
+    def _set_env_vars(self):
+        for key, val in self._env_vars:
+            logging.info('Setting environment variable "{0}"'.format(key))
+            payload = {'name': key, 'value': val}
+            r_json = self._call_openshift(
+                     self._app_data['links']['ADD_ENVIRONMENT_VARIABLE']['href'],
+                     'post', payload)
+            if r_json['status'] != 'created':
+                raise Exception('Failed to set Openshift env variable')
 
-    def _set_env_vars(self, url):
-        for var in self._env_vars:
-            logging.info('Setting environment variable "{0}"'.format(var[0]))
-            payload = {'name': var[0],
-                       'value': var[1]}
-            self._call_openshift(url, 'post', payload)
+    def _restart_app(self):
+        logging.info('Restarting application..')
+        payload = {'event': 'restart'}
+        r_json = self._call_openshift(self.app_data['links']['RESTART']['href'],
+                                      'post', payload)
+        if r_json['status'] != 'ok':
+            raise Exception('Failed to restart Openshift app')
 
     def clone_app(self):
         if not self._app_repo:
             logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
             self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
 
-    def create_app(self):
-        """Create an Openshift application"""
-        payload = {'name': self.app_name,
-                   'cartridge': self.cartridge,
-                   #'scale': True,
-                   'initial_git_url': self.app_git_url}
-        url = self._server_url + '/broker/rest/domains/' + self.domain + '/applications'
-        logging.info('Creating OpenShift application')
-        text = self._call_openshift(url, 'post', payload)
-        logging.info('Created app "{0}"'.format(self.app_name))
-        #self.app_id = r.text['data']['id']
-        #print json.dumps(r.json(), indent=4)
-        self.app_data = text['data']
-        self._set_env_vars(text['data']['links']['ADD_ENVIRONMENT_VARIABLE']['href'])
-        self._restart_app()
-
     def verify_domain(self):
         """Verify that Openshift domain exists"""
-        url = '{0}/broker/rest/domains/{1}'.format(self._server_url, self.domain)
+        url = 'broker/rest/domains/{0}'.format(self.domain)
         logging.info('Verifying Openshift domain "{0}"'.format(self.domain))
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
@@ -534,6 +531,39 @@ class Openshift(object):
             logging.error('Failed to verify Openshift status: {0}'.format(e))
             result = False
         return result
+
+    def create_domain(self):
+        try:
+            self.verify_domain()
+            logging.info('Openshift domain "{0}" already exists'.format(self.domain))
+        except Exception:
+            url = 'broker/rest/domains'
+            payload = {'name': self.domain}
+            logging.info('Creating Openshift domain "{0}"'.format(self.domain))
+            r_json = self._call_openshift(url, 'post', payload)
+            if r_json['status'] != 'created':
+                raise Exception('Domain "{0}" could not be created'.format(self.domain))
+
+    def create_app(self):
+        """Create an Openshift application"""
+        try:
+            self.verify_app()
+            logging.info('Openshift app "{0}" already exists'.format(self.app_name))
+        except Exception:
+            payload = {'name'           : self.app_name,
+                       'cartridge'      : self._cartridge,
+                       'initial_git_url': self._app_git_url}
+            url = 'broker/rest/domain/{0}/applications'.format(self.domain)
+            logging.info('Creating OpenShift application..')
+            r_json = self._call_openshift(url, 'post', payload)
+            if r_json['status'] != 'created':
+                raise Exception('Failed to create Openshift app')
+            self._app_data = r_json['data']
+            logging.info('Created Openshift app "{0}" with ID "{1}"'\
+                         .format(self._app_data['app_url'], self._app_data['id']))
+            self._set_env_vars()
+            self._restart_app()
+            self.verify_app()
 
     def cleanup(self):
         if self._app_local_dir:
@@ -637,6 +667,8 @@ class Configuration(object):
                 'password'    : self._parsed_config.get('openshift', 'password'),
                 'domain'      : self._parsed_config.get(self.isv, 'openshift_domain'),
                 'app_name'    : self._parsed_config.get(self.isv, 'openshift_app'),
+                'app_git_url' : self._parsed_config.get('openshift', 'app_git_url'),
+                'cartridge'   : self._parsed_config.get('openshift', 'cartridge'),
                 'isv_app_name': self._isv_app_name}
 
     @property
@@ -744,7 +776,8 @@ def main():
                 if openshift.image_ids == aws.image_ids:
                     print 'Openshift Crane images matches AWS images'
                 else:
-                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'.format(openshift.image_ids, aws.image_ids))
+                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
+                                  .format(openshift.image_ids, aws.image_ids))
                     status = False
             except Exception as e:
                 logging.error('Failed to compare Openshift and AWS images: {0}'.format(e))
@@ -754,19 +787,26 @@ def main():
             print 'Failed to verify status of "{0}"'.format(config.isv)
 
     elif args.action in 'setup':
-        if args.file_upload:
+        if not args.file_upload:
+            try:
+                aws.create_bucket()
+                openshift.create_domain()
+                openshift.create_app()
+            except Exception as e:
+                logging.error('Failed to setup ISV: {0}'.format(e))
+        else:
             # special case to create repo if not exists and upload file to pulp server
             try:
                 pulp = PulpServer(**config.pulp_conf)
                 pulp.status
             except Exception as e:
-                logging.critical('Failed to initialize Pulp: {0}'.format(e))
+                logging.error('Failed to initialize Pulp: {0}'.format(e))
                 sys.exit(1)
             if not pulp.is_repo(config.pulp_repo):
                 try:
                     pulp.create_repo(config.isv, config.image, config.pulp_repo)
                 except Exception as e:
-                    logging.critical('Failed to create Pulp repository: {0}'.format(e))
+                    logging.error('Failed to create Pulp repository: {0}'.format(e))
                     sys.exit(1)
             else:
                 logging.info('Pulp repository "{0}" already exists'.format(config.pulp_repo))
@@ -776,8 +816,6 @@ def main():
             except Exception as e:
                 logging.error('Failed to upload image to Pulp: {0}'.format(e))
                 sys.exit(1)
-
-            sys.exit(1)
 
     elif args.action in 'push':
         try:

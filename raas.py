@@ -579,7 +579,7 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, isv_app_name=None, image=None, file_upload=None):
+    def __init__(self, isv, isv_app_name=None, image=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -590,13 +590,6 @@ class Configuration(object):
         self._isv_app_name = isv_app_name
         if image:
             self.pulp_repo = image
-        elif file_upload:
-            if not ".tar" in file_upload:
-                raise Exception('Uploaded file must be output of "docker save some/image > some-image.tar"')
-            else:
-                strip_tar = re.sub('\.tar$', '', file_upload)
-                self.pulp_repo = strip_tar
-                self.image = strip_tar.replace('-', '/')
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
@@ -728,11 +721,13 @@ def main():
     status_parser.add_argument(*isv_app_args, **isv_app_kwargs)
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
-    setup_parser.add_argument('-f', '--file_upload', metavar='IMAGE-NAME.TAR',
-            help='File to upload to pulp server. Output of of "docker save some/image > image-name.tar". This does not setup rest of the environment.')
     push_parser = subparsers.add_parser('push', help='Push or update an image')
     push_parser.add_argument(*isv_args, **isv_kwargs)
     push_parser.add_argument('image', metavar='IMAGE', help='Image name')
+    pulp_upload_parser = subparsers.add_parser('pulp-upload', help='Upload image to pulp')
+    pulp_upload_parser.add_argument(*isv_args, **isv_kwargs)
+    pulp_upload_parser.add_argument('image', metavar='IMAGE', help='Image name')
+    pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar', help='File to upload to pulp server. Output of of "docker save some/image > image.tar".')
     args = parser.parse_args()
 
     if args.log:
@@ -746,8 +741,6 @@ def main():
             config_kwargs['isv_app_name'] = args.isv_app
         if hasattr(args, 'image'):
             config_kwargs['image'] = args.image
-        if hasattr(args, 'file_upload'):
-            config_kwargs['file_upload'] = args.file_upload
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
@@ -787,35 +780,12 @@ def main():
             print 'Failed to verify status of "{0}"'.format(config.isv)
 
     elif args.action in 'setup':
-        if not args.file_upload:
-            try:
-                aws.create_bucket()
-                openshift.create_domain()
-                openshift.create_app()
-            except Exception as e:
-                logging.error('Failed to setup ISV: {0}'.format(e))
-        else:
-            # special case to create repo if not exists and upload file to pulp server
-            try:
-                pulp = PulpServer(**config.pulp_conf)
-                pulp.status
-            except Exception as e:
-                logging.error('Failed to initialize Pulp: {0}'.format(e))
-                sys.exit(1)
-            if not pulp.is_repo(config.pulp_repo):
-                try:
-                    pulp.create_repo(config.isv, config.image, config.pulp_repo)
-                except Exception as e:
-                    logging.error('Failed to create Pulp repository: {0}'.format(e))
-                    sys.exit(1)
-            else:
-                logging.info('Pulp repository "{0}" already exists'.format(config.pulp_repo))
-            try:
-                pulp.upload_image(config.pulp_repo, args.file_upload)
-                print 'Uploaded image to pulp repo "{0}"'.format(config.pulp_repo)
-            except Exception as e:
-                logging.error('Failed to upload image to Pulp: {0}'.format(e))
-                sys.exit(1)
+        try:
+            aws.create_bucket()
+            openshift.create_domain()
+            openshift.create_app()
+        except Exception as e:
+            logging.error('Failed to setup ISV: {0}'.format(e))
 
     elif args.action in 'push':
         try:
@@ -857,6 +827,29 @@ def main():
         #s3.upload_layers(files)
         #os = Openshift(**conf_file._sections['openshift'])
         #os.create_app()
+
+    elif args.action in 'pulp-upload':
+        try:
+            pulp = PulpServer(**config.pulp_conf)
+            print "######", config.pulp_repo, args.file_upload
+            pulp.status
+        except Exception as e:
+            logging.error('Failed to initialize Pulp: {0}'.format(e))
+            sys.exit(1)
+        if not pulp.is_repo(config.pulp_repo):
+            try:
+                pulp.create_repo(config.isv, config.image, config.pulp_repo)
+            except Exception as e:
+                logging.error('Failed to create Pulp repository: {0}'.format(e))
+                sys.exit(1)
+        else:
+            logging.info('Pulp repository "{0}" already exists'.format(config.pulp_repo))
+        try:
+            pulp.upload_image(config.pulp_repo, config.file_upload)
+            print 'Uploaded image to pulp repo "{0}"'.format(config.pulp_repo)
+        except Exception as e:
+            logging.error('Failed to upload image to Pulp: {0}'.format(e))
+            sys.exit(1)
 
     if not args.nocommit:
         config.commit_all_changes()

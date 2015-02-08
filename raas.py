@@ -741,7 +741,11 @@ def main():
     try:
         config_kwargs = {}
         if hasattr(args, 'isv_app'):
-            config_kwargs['isv_app_name'] = args.isv_app
+            p = re.compile('^.+/.+$')
+            if not p.match(args.isv_app):
+                raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
+            else:
+                config_kwargs['isv_app_name'] = args.isv_app
         config_kwargs['config_branch'] = args.configenv
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:

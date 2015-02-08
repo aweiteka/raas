@@ -579,7 +579,7 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, config_branch, isv_app_name=None, image=None):
+    def __init__(self, isv, config_branch, isv_app_name=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -589,8 +589,6 @@ class Configuration(object):
         self._config_branch = config_branch
         self.isv = isv
         self._isv_app_name = isv_app_name
-        if image:
-            self.pulp_repo = image
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
@@ -637,12 +635,8 @@ class Configuration(object):
     @property
     def pulp_repo(self):
         """Pulp-friendly repository name with ISV name and without slash"""
-        return self._pulp_repo
-
-    @pulp_repo.setter
-    def pulp_repo(self, image):
-        img_replace = image.replace('/', '-')
-        self._pulp_repo = '-'.join([self.isv, img_replace])
+        img_replace = self.isv_app_name.replace('/', '-')
+        return '-'.join([self.isv, img_replace])
 
     @property
     def pulp_redirect_url(self):
@@ -712,10 +706,10 @@ def main():
     """Entrypoint for script"""
     isv_args = ['isv']
     isv_kwargs = {'metavar': 'ISV_NAME',
-                  'help': 'ISV name matching config file and OpenShift Online domain'}
+                  'help': 'ISV name matching config file section'}
     isv_app_args = ['isv_app']
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
-                      'help': 'ISV Application name'}
+                      'help': 'ISV Application name. Example: "some/app"'}
     parser = ArgumentParser()
     parser.add_argument('-l', '--log', metavar='LOG_LEVEL',
             help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
@@ -732,10 +726,10 @@ def main():
     setup_parser.add_argument(*isv_args, **isv_kwargs)
     publish_parser = subparsers.add_parser('publish', help='Publish new or updated image')
     publish_parser.add_argument(*isv_args, **isv_kwargs)
-    publish_parser.add_argument('image', metavar='IMAGE', help='Image name')
+    publish_parser.add_argument(*isv_app_args, **isv_app_kwargs)
     pulp_upload_parser = subparsers.add_parser('pulp-upload', help='Upload image to pulp')
     pulp_upload_parser.add_argument(*isv_args, **isv_kwargs)
-    pulp_upload_parser.add_argument('image', metavar='IMAGE', help='Image name')
+    pulp_upload_parser.add_argument(*isv_app_args, **isv_app_kwargs)
     pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar', help='File to upload to pulp server. Output of of "docker save some/image > image.tar".')
     args = parser.parse_args()
 
@@ -748,8 +742,6 @@ def main():
         config_kwargs = {}
         if hasattr(args, 'isv_app'):
             config_kwargs['isv_app_name'] = args.isv_app
-        if hasattr(args, 'image'):
-            config_kwargs['image'] = args.image
         config_kwargs['config_branch'] = args.configenv
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:
@@ -797,7 +789,7 @@ def main():
         except Exception as e:
             logging.error('Failed to setup ISV: {0}'.format(e))
 
-    elif args.action in 'push':
+    elif args.action in 'publish':
         try:
             pulp = PulpServer(**config.pulp_conf)
             pulp.status
@@ -847,7 +839,7 @@ def main():
             sys.exit(1)
         if not pulp.is_repo(config.pulp_repo):
             try:
-                pulp.create_repo(config.isv, config.image, config.pulp_repo)
+                pulp.create_repo(config.isv, config.isv_app_name, config.pulp_repo)
             except Exception as e:
                 logging.error('Failed to create Pulp repository: {0}'.format(e))
                 sys.exit(1)

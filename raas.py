@@ -579,13 +579,14 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, isv_app_name=None, image=None):
+    def __init__(self, isv, config_branch, isv_app_name=None, image=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
         self._pulp_repo = None
+        self._config_branch = config_branch
         self.isv = isv
         self._isv_app_name = isv_app_name
         if image:
@@ -613,6 +614,10 @@ class Configuration(object):
 
         self._setup_isv_config_dirs()
         self._setup_isv_config_file()
+
+    @property
+    def config_branch(self):
+        return self._config_branch
 
     @property
     def isv(self):
@@ -675,6 +680,7 @@ class Configuration(object):
                 'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
     def commit_all_changes(self):
+        # NOTE: we will use the branch specified in self.config_branch
         #self._config_repo._index.add(FIXME)
         #self._config_repo._index.commit(FIXME)
         #self._config_repo.remotes.origin.push()
@@ -715,6 +721,9 @@ def main():
             help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
     parser.add_argument('-n', '--nocommit', action='store_true',
                         help='Do not commit configuration. Development only.')
+    parser.add_argument('-c', '--configenv', metavar='BRANCH', default='master',
+                        choices=['dev', 'stage', 'master'],
+                        help='Working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Production default is "master"')
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
@@ -741,6 +750,7 @@ def main():
             config_kwargs['isv_app_name'] = args.isv_app
         if hasattr(args, 'image'):
             config_kwargs['image'] = args.image
+        config_kwargs['config_branch'] = args.configenv
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
@@ -831,7 +841,6 @@ def main():
     elif args.action in 'pulp-upload':
         try:
             pulp = PulpServer(**config.pulp_conf)
-            print "######", config.pulp_repo, args.file_upload
             pulp.status
         except Exception as e:
             logging.error('Failed to initialize Pulp: {0}'.format(e))

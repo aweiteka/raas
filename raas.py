@@ -669,7 +669,7 @@ class Configuration(object):
         """Returns Pulp server redirect URL for S3 bucket"""
         return '/'.join([self._S3_URL,
                          self._parsed_config.get(self.isv, 's3_bucket'),
-                         self._isv_app_name])
+                         self._parsed_config.get(self.isv, 'openshift_app')])
 
     @property
     def pulp_conf(self):

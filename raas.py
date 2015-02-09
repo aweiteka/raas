@@ -747,7 +747,7 @@ def main():
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
-    status_parser.add_argument(*isv_app_args, **isv_app_kwargs)
+    status_parser.add_argument('-a', '--isv_app', **isv_app_kwargs)
     status_parser.add_argument('-p', '--pulp', action='store_true',
                         help='Include checking the pulp server status')
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
@@ -769,11 +769,12 @@ def main():
     try:
         config_kwargs = {}
         if hasattr(args, 'isv_app'):
-            p = re.compile('^.+/.+$')
-            if not p.match(args.isv_app):
-                raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
-            else:
-                config_kwargs['isv_app_name'] = args.isv_app
+            if args.isv_app:
+                p = re.compile('^.+/.+$')
+                if not p.match(args.isv_app):
+                    raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
+                else:
+                    config_kwargs['isv_app_name'] = args.isv_app
         if hasattr(args, 'file_upload'):
             config_kwargs['file_upload'] = args.file_upload
         config_kwargs['config_branch'] = args.configenv

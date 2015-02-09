@@ -16,6 +16,7 @@ from git import Repo
 from glob import glob
 from shutil import rmtree
 from tempfile import mkdtemp, NamedTemporaryFile
+from time import sleep
 from urlparse import urlsplit
 
 class PulpServer(object):
@@ -588,6 +589,7 @@ class Openshift(object):
                          .format(self._app_data['app_url'], self._app_data['id']))
             self._set_env_vars()
             self._restart_app()
+            sleep(5)
             self.verify_app()
 
     def cleanup(self):
@@ -604,7 +606,8 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None):
+    def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
+                 oodomain=None, ooapp=None, s3bucket=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -615,6 +618,9 @@ class Configuration(object):
         self.isv = isv
         self._isv_app_name = isv_app_name
         self.file_upload = file_upload
+        self.oodomain = oodomain
+        self.ooapp = ooapp
+        self.s3bucket = s3bucket
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
@@ -659,6 +665,54 @@ class Configuration(object):
         return self._isv_app_name
 
     @property
+    def oodomain(self):
+        if self._oodomain:
+            return self._oodomain
+        else:
+            return self.isv
+
+    @oodomain.setter
+    def oodomain(self, val):
+        if val:
+            if not val.isalnum():
+                raise ValueError('Openshift domain "{0}" must contain only alphanumeric characters'.format(val))
+            self._oodomain = val.lower()
+            logging.debug('Openshift domain set to "{0}"'.format(self.isv))
+        else:
+            self._oodomain = None
+
+    @property
+    def ooapp(self):
+        if self._ooapp:
+            return self._ooapp
+        else:
+            return 'registry'
+
+    @ooapp.setter
+    def ooapp(self, val):
+        if val:
+            if not val.isalnum():
+                raise ValueError('Openshift app name "{0}" must contain only alphanumeric characters'.format(val))
+            self._ooapp = val.lower()
+            logging.debug('Openshift app name set to "{0}"'.format(self.isv))
+        self._ooapp = None
+
+    @property
+    def s3bucket(self):
+        if self._s3bucket:
+            return self._s3bucket
+        else:
+            return self.isv + '.bucket'
+
+    @s3bucket.setter
+    def s3bucket(self, val):
+        if val:
+            self._s3bucket = val.lower()
+            logging.debug('S3 bucket name set to "{0}"'.format(self.isv))
+        else:
+            self._s3bucket = None
+
+    @property
     def pulp_repo(self):
         """Pulp-friendly repository name with ISV name and without slash"""
         img_replace = self.isv_app_name.replace('/', '-')
@@ -669,7 +723,7 @@ class Configuration(object):
         """Returns Pulp server redirect URL for S3 bucket"""
         return '/'.join([self._S3_URL,
                          self._parsed_config.get(self.isv, 's3_bucket'),
-                         self._isv_app_name])
+                         self._parsed_config.get(self.isv, 'openshift_app')])
 
     @property
     def pulp_conf(self):
@@ -721,9 +775,9 @@ class Configuration(object):
         if not self._parsed_config.has_section(self.isv):
             logging.info('Creating default ISV section in config file')
             self._parsed_config.add_section(self.isv)
-            self._parsed_config.set(self.isv, 'openshift_domain', self.isv)
-            self._parsed_config.set(self.isv, 'openshift_app', 'registry')
-            self._parsed_config.set(self.isv, 's3_bucket', self.isv + '.bucket')
+            self._parsed_config.set(self.isv, 'openshift_domain', self.oodomain)
+            self._parsed_config.set(self.isv, 'openshift_app', self.ooapp)
+            self._parsed_config.set(self.isv, 's3_bucket', self.s3bucket)
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)
 
@@ -752,6 +806,9 @@ def main():
                         help='Include checking the pulp server status')
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
+    setup_parser.add_argument('--oodomain', help='Openshift domain for this ISV, default is ISV name')
+    setup_parser.add_argument('--ooapp', help='Openshift crane app name for this ISV, default is "registry"')
+    setup_parser.add_argument('--s3bucket', help='AWS S3 bucket name for this ISV, default is [ISV_NAME].bucket')
     publish_parser = subparsers.add_parser('publish', help='Publish new or updated image')
     publish_parser.add_argument(*isv_args, **isv_kwargs)
     publish_parser.add_argument(*isv_app_args, **isv_app_kwargs)
@@ -771,13 +828,19 @@ def main():
         if hasattr(args, 'isv_app'):
             if args.isv_app:
                 p = re.compile('^.+/.+$')
-                if not p.match(args.isv_app):
-                    raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
-                else:
+                if p.match(args.isv_app):
                     config_kwargs['isv_app_name'] = args.isv_app
+                else:
+                    raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
         if hasattr(args, 'file_upload'):
             config_kwargs['file_upload'] = args.file_upload
         config_kwargs['config_branch'] = args.configenv
+        if hasattr(args, 'oodomain'):
+            config_kwargs['oodomain'] = args.oodomain
+        if hasattr(args, 'ooapp'):
+            config_kwargs['ooapp'] = args.ooapp
+        if hasattr(args, 's3bucket'):
+            config_kwargs['s3bucket'] = args.s3bucket
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))

@@ -152,10 +152,15 @@ class PulpServer(object):
             raise Exception('Cannot find file "{0}"'.format(file_upload))
         else:
             upload_id = self._upload_id
-            logging.info('Uploading image using ID "{0}"'.format(upload_id))
+            logging.info('Uploading image to pulp using ID "{0}"'.format(upload_id))
             self._upload_bits(upload_id, file_upload)
+            logging.info('Importing uploaded image to pulp repo "{0}"'.format(upload_id))
             self._import_upload(upload_id, repo_id)
             self._delete_upload_id(upload_id)
+            logging.info('Publishing repo "{0}" to pulp web server'.format(repo_id))
+            self._publish_repo(repo_id)
+            logging.info('Exporting repo "{0}" as tar file to pulp web server'.format(repo_id))
+            self._export_repo(repo_id)
 
     def _upload_bits(self, upload_id, file_upload):
         logging.info('Uploading file ({0})'.format(file_upload))
@@ -188,8 +193,23 @@ class PulpServer(object):
         if 'error_message' in r_json:
             raise Exception('Unable to import pulp content into {0}'.format(repo_id))
 
-    def export_repo(self, repo_id):
-        """Export pulp repository"""
+    def _publish_repo(self, repo_id):
+        """Publish pulp repository to pulp web server"""
+        url = '{0}/pulp/api/v2/repositories/{1}/actions/publish/'.format(self._server_url, repo_id)
+        payload = {
+          "id": self._web_distributor,
+          "override_config": {}
+        }
+        logging.info('Publishing pulp repository "{0}"'.format(repo_id))
+        r_json = self._call_pulp(url, "post", payload)
+        if 'error_message' in r_json:
+            raise Exception('Unable to publish pulp repo "{0}"'.format(repo_id))
+
+    def _export_repo(self, repo_id):
+        """Export pulp repository to pulp web server as tar
+
+        The tarball is split into the layer components and crane metadata.
+        It is for the purpose of uploading to remote crane server"""
         url = '{0}/pulp/api/v2/repositories/{1}/actions/publish/'.format(self._server_url, repo_id)
         payload = {
           "id": self._export_distributor,
@@ -197,10 +217,10 @@ class PulpServer(object):
             "export_file": '{0}{1}.tar'.format(self._export_dir, repo_id),
           }
         }
-        logging.info('Publishing pulp repository "{0}"'.format(repo_id))
+        logging.info('Exporting pulp repository "{0}"'.format(repo_id))
         r_json = self._call_pulp(url, "post", payload)
         if 'error_message' in r_json:
-            raise Exception('Unable to publish pulp repo "{0}"'.format(repo_id))
+            raise Exception('Unable to export pulp repo "{0}"'.format(repo_id))
 
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
@@ -579,7 +599,7 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
     _S3_URL = "https://s3.amazonaws.com"
 
-    def __init__(self, isv, config_branch, isv_app_name=None):
+    def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -589,6 +609,7 @@ class Configuration(object):
         self._config_branch = config_branch
         self.isv = isv
         self._isv_app_name = isv_app_name
+        self.file_upload = file_upload
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
@@ -746,6 +767,8 @@ def main():
                 raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
             else:
                 config_kwargs['isv_app_name'] = args.isv_app
+        if hasattr(args, 'file_upload'):
+            config_kwargs['file_upload'] = args.file_upload
         config_kwargs['config_branch'] = args.configenv
         config = Configuration(args.isv, **config_kwargs)
     except Exception as e:

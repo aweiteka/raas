@@ -748,6 +748,8 @@ def main():
     status_parser = subparsers.add_parser('status', help='Check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
     status_parser.add_argument(*isv_app_args, **isv_app_kwargs)
+    status_parser.add_argument('-p', '--pulp', action='store_true',
+                        help='Include checking the pulp server status')
     setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
     publish_parser = subparsers.add_parser('publish', help='Publish new or updated image')
@@ -794,6 +796,10 @@ def main():
 
     if args.action in 'status':
         status = True
+        if args.pulp:
+            pulp = PulpServer(**config.pulp_conf)
+            if not pulp.status:
+                status = False
         if not aws.status():
             status = False
         if not openshift.status():

@@ -599,8 +599,8 @@ class Configuration(object):
                 raise Exception('Current working directory does not contain "{0}" configuration file ' + \
                         'and environment variable "{1}" is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
             self._conf_dir = mkdtemp()
-            logging.info('Clonning config repo from "{0}" to "{1}"'.format(repo_url, self._conf_dir))
-            self._config_repo = Repo.clone_from(repo_url, self._conf_dir)
+            logging.info('Clonning config repo from "{0}:{1}" to "{2}"'.format(repo_url, self._config_branch, self._conf_dir))
+            self._config_repo = Repo.clone_from(repo_url, self._conf_dir, branch=self._config_branch)
 
         self._conf_file = os.path.join(self._conf_dir, self._CONFIG_FILE_NAME)
         if not os.path.isfile(self._conf_file):

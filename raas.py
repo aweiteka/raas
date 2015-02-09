@@ -159,8 +159,6 @@ class PulpServer(object):
             self._delete_upload_id(upload_id)
             logging.info('Publishing repo "{0}" to pulp web server'.format(repo_id))
             self._publish_repo(repo_id)
-            logging.info('Exporting repo "{0}" as tar file to pulp web server'.format(repo_id))
-            self._export_repo(repo_id)
 
     def _upload_bits(self, upload_id, file_upload):
         logging.info('Uploading file ({0})'.format(file_upload))
@@ -205,7 +203,7 @@ class PulpServer(object):
         if 'error_message' in r_json:
             raise Exception('Unable to publish pulp repo "{0}"'.format(repo_id))
 
-    def _export_repo(self, repo_id):
+    def export_repo(self, repo_id):
         """Export pulp repository to pulp web server as tar
 
         The tarball is split into the layer components and crane metadata.

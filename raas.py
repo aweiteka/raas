@@ -21,7 +21,7 @@ from urlparse import urlsplit
 class PulpServer(object):
     """Interact with Pulp API"""
     def __init__(self, server_url, username, password, verify_ssl):
-        self._server_url = server_url
+        self._server_url = self._get_server_url(server_url)
         self._username = username
         self._password = password
         self._verify_ssl = verify_ssl
@@ -31,6 +31,13 @@ class PulpServer(object):
         self._export_dir = "/var/www/pub/docker/web/"
         self._unit_type_id = "docker_image"
         self._chunk_size = 1048576 # 1 MB per upload call
+
+    def _get_server_url(self, url):
+        new_url = url
+        p = re.compile('^https://')
+        if not p.match(url):
+            new_url = 'https://%s' % url
+        return new_url
 
     def _call_pulp(self, url, req_type='get', payload=None):
         if req_type == 'get':

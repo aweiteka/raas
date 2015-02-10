@@ -59,11 +59,16 @@ class PulpServer(object):
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
         r_json = r.json()
+
+        logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
+
+        if r.status_code >= 400:
+            raise Exception('Received invalid status code: {0}'.format(r.status_code))
+
         # some requests return null
         if not r_json:
             return r_json
 
-        logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
         logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
         if 'error_message' in r_json:
@@ -75,11 +80,11 @@ class PulpServer(object):
                 self._call_pulp('{0}/{1}'.format(self._server_url, task['_href']))
         return r_json
 
-    @property
     def status(self):
-        """Return pulp server status"""
-        logging.info('Verifying Pulp server status')
-        return self._call_pulp('{0}/pulp/api/v2/status/'.format(self._server_url))
+        """Check pulp server status"""
+        logging.info('Verifying Pulp server status..')
+        self._call_pulp('{0}/pulp/api/v2/status/'.format(self._server_url))
+        print 'Pulp server looks OK'
 
     def verify_repo(self, repo_id):
         """Verify pulp repository exists"""
@@ -370,7 +375,7 @@ class AwsS3(object):
 
     def status(self):
         result = True
-        logging.info('Checking AWS status...')
+        logging.info('Checking AWS status..')
         try:
             self.verify_bucket()
             print 'AWS bucket "{0}" looks OK'.format(self.bucket_name)
@@ -447,6 +452,10 @@ class Openshift(object):
         return self._app_name
 
     @property
+    def isv_app_name(self):
+        return self._isv_app_name
+
+    @property
     def app_local_dir(self):
         if not self._app_local_dir:
             self._app_local_dir = mkdtemp()
@@ -476,7 +485,7 @@ class Openshift(object):
         if not self._image_ids:
             with open(self._isv_app_crane_file) as f:
                 data = json.load(f)
-            logging.debug('Crane "{0}.json" data:\n{1}'.format(self._isv_app_name, json.dumps(data, indent=2)))
+            logging.debug('Crane "{0}.json" data:\n{1}'.format(self.isv_app_name, json.dumps(data, indent=2)))
             self._image_ids = [i['id'] for i in data['images']]
             self._image_ids = set(self._image_ids)
             logging.info('Crane image IDs: {0}'.format(self._image_ids))
@@ -485,7 +494,7 @@ class Openshift(object):
     @property
     def _isv_app_crane_file(self):
         self.clone_app()
-        filename = os.path.join(self.app_local_dir, 'crane', 'data', self._isv_app_name + '.json')
+        filename = os.path.join(self.app_local_dir, 'crane', 'data', self.isv_app_name + '.json')
         if not os.path.isfile(filename):
             raise Exception('ISV app crane file "{0}" does not exist'.format(filename))
         return filename
@@ -517,6 +526,9 @@ class Openshift(object):
             for m in r_json['messages']:
                 msgs += '\n - ' + m['text']
             logging.info('Messages from Openshift response:{0}'.format(msgs))
+
+        if r.status_code >= 400:
+            raise Exception('Received invalid status code: {0}'.format(r.status_code))
 
         return r_json
 
@@ -571,8 +583,11 @@ class Openshift(object):
             print 'Openshift Crane app on "{0}" looks alive'.format(self.app_data['app_url'])
             self.clone_app()
             print 'Cloned Openshift app "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
-            cranefile = self._isv_app_crane_file
-            print 'ISV app crane file "{0}" exists'.format(cranefile)
+            if self._isv_app_name:
+                cranefile = self._isv_app_crane_file
+                print 'ISV app crane file "{0}" exists'.format(cranefile)
+            else:
+                print 'Skipping ISV app crane file check as ISV app name was not specified'
         except Exception as e:
             logging.error('Failed to verify Openshift status: {0}'.format(e))
             result = False
@@ -878,44 +893,49 @@ def main():
         logging.critical('Failed to initialize AWS: {0}'.format(e))
         sys.exit(1)
 
+    ret = 0
+
     if args.action in 'status':
         status = True
         if args.pulp:
-            pulp = PulpServer(**config.pulp_conf)
-            pulp.remove_orphan_content()
-            if not pulp.status:
+            try:
+                pulp = PulpServer(**config.pulp_conf)
+                pulp.status()
+                pulp.remove_orphan_content()
+            except Exception as e:
+                logging.error('Failed to verify Pulp status: {0}'.format(e))
                 status = False
         if not aws.status():
             status = False
         if not openshift.status():
             status = False
-        if status:
-            try:
-                if openshift.image_ids == aws.image_ids:
-                    print 'Openshift Crane images matches AWS images'
-                else:
-                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
-                                  .format(openshift.image_ids, aws.image_ids))
-                    status = False
-            except Exception as e:
-                logging.error('Failed to compare Openshift and AWS images: {0}'.format(e))
+        if status and openshift.isv_app_name:
+            if openshift.image_ids == aws.image_ids:
+                print 'Openshift Crane images matches AWS images'
+            else:
+                logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
+                              .format(openshift.image_ids, aws.image_ids))
+                status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)
         else:
             print 'Failed to verify status of "{0}"'.format(config.isv)
+            ret = 1
 
     elif args.action in 'setup':
         try:
             aws.create_bucket()
             openshift.create_domain()
             openshift.create_app()
+            print 'ISV "{0}" was setup correctly'.format(config.isv)
         except Exception as e:
             logging.error('Failed to setup ISV: {0}'.format(e))
+            ret = 1
 
     elif args.action in 'publish':
         try:
             pulp = PulpServer(**config.pulp_conf)
-            pulp.status
+            pulp.status()
         except Exception as e:
             logging.critical('Failed to initialize Pulp: {0}'.format(e))
             sys.exit(1)
@@ -956,7 +976,7 @@ def main():
     elif args.action in 'pulp-upload':
         try:
             pulp = PulpServer(**config.pulp_conf)
-            pulp.status
+            pulp.status()
         except Exception as e:
             logging.error('Failed to initialize Pulp: {0}'.format(e))
             sys.exit(1)
@@ -979,6 +999,8 @@ def main():
         config.commit_all_changes()
 
     openshift.cleanup()
+
+    sys.exit(ret)
 
 
 if __name__ == '__main__':

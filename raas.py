@@ -228,6 +228,25 @@ class PulpServer(object):
         if 'error_message' in r_json:
             raise Exception('Unable to export pulp repo "{0}"'.format(repo_id))
 
+    def remove_orphan_content(self, content_type="docker_image"):
+        """Remove orphan content"""
+        self._list_orphans()
+        logging.info('Removing orphaned content "{0}"'.format(content_type))
+        url = '{0}/pulp/api/v2/content/orphans/{1}/'.format(self._server_url, content_type)
+        r_json = self._call_pulp(url, "delete")
+        if 'error_message' in r_json:
+            raise Exception('Unable to remove orphaned content type "{0}"'.format(content_type))
+
+    def _list_orphans(self, content_type="docker_image"):
+        """List (log) orphan content. Defaults to docker content"""
+
+        url = '{0}/pulp/api/v2/content/orphans/{1}/'.format(self._server_url, content_type)
+        r_json = self._call_pulp(url)
+        content = [content['image_id'] for content in r_json]
+        logging.info('Orphan "{0}" content:\n{1}'.format(content_type, content))
+        if 'error_message' in r_json:
+            raise Exception('Unable to list orphaned content type "{0}"'.format(content_type))
+
 class PulpTar(object):
     """Models tarfile exported from Pulp"""
     def __init__(self, tarfile):
@@ -862,6 +881,7 @@ def main():
         status = True
         if args.pulp:
             pulp = PulpServer(**config.pulp_conf)
+            pulp.remove_orphan_content()
             if not pulp.status:
                 status = False
         if not aws.status():

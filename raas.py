@@ -59,11 +59,16 @@ class PulpServer(object):
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
         r_json = r.json()
+
+        logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
+
+        if r.status_code >= 400:
+            raise Exception('Received invalid status code: {0}'.format(r.status_code))
+
         # some requests return null
         if not r_json:
             return r_json
 
-        logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
         logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
         if 'error_message' in r_json:
@@ -75,11 +80,11 @@ class PulpServer(object):
                 self._call_pulp('{0}/{1}'.format(self._server_url, task['_href']))
         return r_json
 
-    @property
     def status(self):
-        """Return pulp server status"""
-        logging.info('Verifying Pulp server status')
-        return self._call_pulp('{0}/pulp/api/v2/status/'.format(self._server_url))
+        """Check pulp server status"""
+        logging.info('Verifying Pulp server status..')
+        self._call_pulp('{0}/pulp/api/v2/status/'.format(self._server_url))
+        print 'Pulp server looks OK'
 
     def verify_repo(self, repo_id):
         """Verify pulp repository exists"""
@@ -370,7 +375,7 @@ class AwsS3(object):
 
     def status(self):
         result = True
-        logging.info('Checking AWS status...')
+        logging.info('Checking AWS status..')
         try:
             self.verify_bucket()
             print 'AWS bucket "{0}" looks OK'.format(self.bucket_name)
@@ -521,6 +526,9 @@ class Openshift(object):
             for m in r_json['messages']:
                 msgs += '\n - ' + m['text']
             logging.info('Messages from Openshift response:{0}'.format(msgs))
+
+        if r.status_code >= 400:
+            raise Exception('Received invalid status code: {0}'.format(r.status_code))
 
         return r_json
 
@@ -890,24 +898,24 @@ def main():
     if args.action in 'status':
         status = True
         if args.pulp:
-            pulp = PulpServer(**config.pulp_conf)
-            pulp.remove_orphan_content()
-            if not pulp.status:
+            try:
+                pulp = PulpServer(**config.pulp_conf)
+                pulp.status()
+                pulp.remove_orphan_content()
+            except Exception as e:
+                logging.error('Failed to verify Pulp status: {0}'.format(e))
                 status = False
         if not aws.status():
             status = False
         if not openshift.status():
             status = False
         if status and openshift.isv_app_name:
-            try:
-                if openshift.image_ids == aws.image_ids:
-                    print 'Openshift Crane images matches AWS images'
-                else:
-                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
-                                  .format(openshift.image_ids, aws.image_ids))
-                    status = False
-            except Exception as e:
-                logging.error('Failed to compare Openshift and AWS images: {0}'.format(e))
+            if openshift.image_ids == aws.image_ids:
+                print 'Openshift Crane images matches AWS images'
+            else:
+                logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
+                              .format(openshift.image_ids, aws.image_ids))
+                status = False
         if status:
             print 'Status of "{0}" should be OK'.format(config.isv)
         else:
@@ -927,7 +935,7 @@ def main():
     elif args.action in 'publish':
         try:
             pulp = PulpServer(**config.pulp_conf)
-            pulp.status
+            pulp.status()
         except Exception as e:
             logging.critical('Failed to initialize Pulp: {0}'.format(e))
             sys.exit(1)
@@ -968,7 +976,7 @@ def main():
     elif args.action in 'pulp-upload':
         try:
             pulp = PulpServer(**config.pulp_conf)
-            pulp.status
+            pulp.status()
         except Exception as e:
             logging.error('Failed to initialize Pulp: {0}'.format(e))
             sys.exit(1)

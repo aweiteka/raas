@@ -16,6 +16,7 @@ Below is a typical use of the `raas` tool. The following global options may be u
 ### Upload image to pulp server
 
 **Prerequisites**
+
 1. access to a pulp server
 1. a saved docker image: `docker save <some/image> > some-image.tar`
 
@@ -23,9 +24,13 @@ Below is a typical use of the `raas` tool. The following global options may be u
 raas pulp-upload <isv> <some/image> some-image.tar
 ```
 
+* creates pulp repository for docker content if it doesn't exist
+* uploads local tar file
+
 ### New setup
 
 **Prerequisites**
+
 1. Create an OpenShift domain
 1. Create an empty AWS S3 bucket with read+write permissions.
 
@@ -33,15 +38,15 @@ raas pulp-upload <isv> <some/image> some-image.tar
 raas setup <isv>
 ```
 
-* Validate openshift domain
-* validate AWS S3 bucket access
-* get target crane release tar, init git repo with openshift online remote
-* create gear
-* validate registry at `/v1/_ping`
+* Validates openshift domain
+* validates AWS S3 bucket access
+* creates Crane registry as an OpenShift gear
+* validates registry at `/v1/_ping`
 
 ### Publish or update an image
 
 **Prerequisites**
+
 1. Setup has been run
 1. An image has been uploaded to the pulp server
 
@@ -49,13 +54,12 @@ raas setup <isv>
 raas publish <isv> <some/image>
 ```
 
-* Clone deployed openshift crane repo
-* get image from pulp
-* push ISV layers to S3
-* get RH metadata files
-* add ISV metadata
+* Clones deployed openshift crane repo
+* downloads image from pulp
+* pushes ISV layers to S3
+* gets RH metadata
+* adds ISV metadata
 * git commit, git push to OpenShift
-* backup ISV metadata to config repo, git commit, git push config repo
 
 ### Status
 
@@ -63,23 +67,21 @@ raas publish <isv> <some/image>
 raas status <isv> -a <some/image> --pulp
 ```
 
-* Check domain is present
-* check S3 bucket is present
-* clone deployed openshift crane repo `rhc clone ...`
-* get deployed image list
-* pull S3 image list
-* validate lists match
-* check crane registry API `/v1/_ping`
-* run linter on json metadata files
+* Checks domain is present
+* checks S3 bucket is present
+* clones deployed openshift crane repo `rhc clone ...`
+* gets deployed image list
+* pulls S3 image list
+* validates lists match
+* checks crane registry API `/v1/_ping`
 
 ## Troubleshooting
 
-The container packaging of this tool is configured to help with troubleshooting.
+The container packaging of this tool has additional troubleshooting tools installed.
 
 1. `[sudo] docker pull aweiteka/raas`
 1. See below for docker run command.
 1. Use the command-line tools to inspect the system.
-
     * Run diagnostics: `raas --log DEBUG status ...`
     * List AWS S3 resources: `aws s3 ls s3://mybucket --recursive...`
     * Run OpenShift CLI: `rhc ...`
@@ -91,10 +93,15 @@ The container packaging of this tool is configured to help with troubleshooting.
 
 * Python 2.6 or 2.7
 * AWS S3 account
-* OpenShift account, create domain
+* OpenShift account
 * Private repository of credentials and other configuration
 
+
+1. Clone this repository: `git clone https://github.com/aweiteka/raas.git`
 1. Install Python dependencies: `pip install -r requirements.txt`
+1. Make the script executable: `chmod +x raas.py`
+1. choose configuration option (below)
+1. run tool as `./raas.py ...`
 
 ### Configuration
 

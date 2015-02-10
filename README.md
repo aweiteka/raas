@@ -1,130 +1,33 @@
 # Docker Registry as a Service
 
-A prototype docker registry service in the cloud that integrates with Pulp and the Red Hat ecosystem. From a Pulp export file the service deploys docker image layers to cloud storage (AWS S3) and OpenShift (Crane).
-
-## Requirements
-
-* Python 2.6 or 2.7
-* AWS S3 account
-* OpenShift account, create domain
-* Private repository of credentials and other configuration
-
-## Installation
-1. Install Python dependencies: `pip install -r requirements.txt`
-
-## Configuration
-
-There are two ways to manage the configuration of the tool. To use a local configuration, run `raas` from the directory where the `raas.cfg` directory.
-
-### Local (development environment)
-1. Copy config file `cp raas.cfg.template raas.cfg`
-
-```
-cp raas.cfg.template raas.cfg
-```
-
-1. Edit `raas.cfg` config file.
-
-```
-[redhat]
-# layers on that should NOT be uploaded to cloud storage
-# intended for Red Hat image layers that are hosted on RH CDN
-# comma-, space- or line-separated IDs that match tarball IDs
-mask_layers =
-    8dc6a04270dfb41460bd53968e31b14da5414501c935fb67cf25975af9066925
-    dbb4ad53beb6972d3639a16b4505d06d37695a8a494158d564742c24d94c1067
-    bef54b8f8a2fdd221734f1da404d4c0a7d07ee9169b1443a338ab54236c8c91a
-    e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
-
-[openshift]
-server_url = https://openshift.redhat.com
-app_git_url = https://github.com/aweiteka/crane
-# get token from openshift.com or CLI command "rhc authorization list"
-auth_token = asdf1234asdf5678
-username = openshift_username
-password = password
-domain = mydomain
-cartridge = python-2.7
-```
-
-### Remote (production environment)
-1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
-
-### AWS S3
-
-Assumes an AWS account. Boto API uses local configuration. Create credentials file `~/.aws/credentials` with the following values:
-
-```
-[default]
-aws_access_key_id = YOUR_ACCESS_KEY_ID
-aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
-```
-
-## Running as container
-
-Instead of running on a dedicated host, the raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to push and troubleshoot without workstation dependencies.
-
-```
-[sudo] docker run -it --rm \
-              -e RAAS_CONF_REPO="ssh://user@git.example.com:22/private-raas-config" \
-              -e AWS_ACCESS_KEY_ID=<changeme> \
-              -e AWS_SECRET_ACCESS_KEY=<changeme> \
-              -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
-              -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
-              aweiteka/raas
-```
-This provides access to `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` and add your username for the `rhc` client to work.
+A docker registry service in the cloud that integrates with Pulp and the Red Hat ecosystem. Using a Pulp server the service deploys docker image layers to cloud storage (AWS S3) and OpenShift (Crane).
 
 ## Basic Idea
 
-
 ![Alt text](images/federated_registry.png "Registry as a Service")
 
-## In Use
+## Workflow
+Below is a typical use of the `raas` tool. The following global options may be used:
+
+* Set configuration branch: `--configenv dev|stage|master` This is an important feature of `raas`. This enables the user to seemlessly switch between environments that are configured and managed completely separate from each other.
+* Set log level: `--log DEBUG|INFO`
+* Disable commiting configuration after tool runs: `--nocommit` This is typically only used in development.
+
+### Upload image to pulp server
+
+**Prerequisites**
+1. access to a pulp server
+1. a saved docker image: `docker save <some/image> > some-image.tar`
 
 ```
-$ ./raas.py push bigdatainc bigdata-app
-Using local file bigdata-app.tar
-Extracted tarfile to /tmp/tmpgDuAh6
-/tmp/tmpgDuAh6/bigdata-app.json
-Skipping layer e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
-Skipping layer e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
-Skipping layer e1f5733f050b2488a17b7630cb038bfbea8b7bdfa9bdfb99e63a33117e28d02f
-Created S3 bucket bigdatainc.bucket
-Uploading image layers to S3
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/bf3bf3a4371d50acc13a8774e5cd3d9e2ebc4818252893043f93397d69e0ada8/layer
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/bf3bf3a4371d50acc13a8774e5cd3d9e2ebc4818252893043f93397d69e0ada8/json
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/bf3bf3a4371d50acc13a8774e5cd3d9e2ebc4818252893043f93397d69e0ada8/ancestry
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/9f87f5b67e6a56ba461cee756b88401b0584d21947b442eb3cc4638edd65c6c2/layer
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/9f87f5b67e6a56ba461cee756b88401b0584d21947b442eb3cc4638edd65c6c2/json
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/9f87f5b67e6a56ba461cee756b88401b0584d21947b442eb3cc4638edd65c6c2/ancestry
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/769aa15f7c47c8f6ed1b09615ff3d26943492de2b2c588898ddb5e62d1675c49/layer
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/769aa15f7c47c8f6ed1b09615ff3d26943492de2b2c588898ddb5e62d1675c49/json
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/769aa15f7c47c8f6ed1b09615ff3d26943492de2b2c588898ddb5e62d1675c49/ancestry
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/6691d2df8395e6ad20fb3c1acaefeddd4c6eebf8724909aea79927e2f1614b26/layer
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/6691d2df8395e6ad20fb3c1acaefeddd4c6eebf8724909aea79927e2f1614b26/json
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/6691d2df8395e6ad20fb3c1acaefeddd4c6eebf8724909aea79927e2f1614b26/ancestry
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/661e33d746676c865b7f19f931f61ebe1f3c1092cfc76644332c427acda6972c/layer
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/661e33d746676c865b7f19f931f61ebe1f3c1092cfc76644332c427acda6972c/json
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/661e33d746676c865b7f19f931f61ebe1f3c1092cfc76644332c427acda6972c/ancestry
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/2d723127d3c6301b9d9316eea45e6a379ebd941c795e52865e32954ddb0a8a1d/layer
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/2d723127d3c6301b9d9316eea45e6a379ebd941c795e52865e32954ddb0a8a1d/json
-Successfully uploaded to <Bucket: bigdatainc.bucket>:bigdata-app/2d723127d3c6301b9d9316eea45e6a379ebd941c795e52865e32954ddb0a8a1d/ancestry
-Creating OpenShift application
-Created app registry
-Setting environment variable OPENSHIFT_PYTHON_WSGI_APPLICATION
-Setting environment variable OPENSHIFT_PYTHON_DOCUMENT_ROOT
-restarting application
-
+raas pulp-upload <isv> <some/image> some-image.tar
 ```
-
-# Workflow
-
-## Primary commands
 
 ### New setup
 
-Prerequisite: create OpenShift domain, ensure S3 bucket setup with read+write access.
+**Prerequisites**
+1. Create an OpenShift domain
+1. Create an empty AWS S3 bucket with read+write permissions.
 
 ```
 raas setup <isv>
@@ -136,10 +39,14 @@ raas setup <isv>
 * create gear
 * validate registry at `/v1/_ping`
 
-### Push or update image
+### Publish or update an image
+
+**Prerequisites**
+1. Setup has been run
+1. An image has been uploaded to the pulp server
 
 ```
-raas push <isv> <image>
+raas publish <isv> <some/image>
 ```
 
 * Clone deployed openshift crane repo
@@ -153,7 +60,7 @@ raas push <isv> <image>
 ### Status
 
 ```
-raas status <isv>
+raas status <isv> -a <some/image> --pulp
 ```
 
 * Check domain is present
@@ -167,8 +74,64 @@ raas status <isv>
 
 ## Troubleshooting
 
-Use standard tools for troubleshooting
+The container packaging of this tool is configured to help with troubleshooting.
 
-* `aws s3 ...`
-* `rhc ...`
-* `git commit|push ...`
+1. `[sudo] docker pull aweiteka/raas`
+1. See below for docker run command.
+1. Use the command-line tools to inspect the system.
+
+    * Run diagnostics: `raas --log DEBUG status ...`
+    * List AWS S3 resources: `aws s3 ls s3://mybucket --recursive...`
+    * Run OpenShift CLI: `rhc ...`
+    * Inspect configuration repo: `git clone ...`
+
+## Installation
+
+**Requirements**
+
+* Python 2.6 or 2.7
+* AWS S3 account
+* OpenShift account, create domain
+* Private repository of credentials and other configuration
+
+1. Install Python dependencies: `pip install -r requirements.txt`
+
+### Configuration
+
+There are two ways to manage the configuration of the environment. To use a local configuration, run `raas` from the directory where the `raas.cfg` directory.
+
+#### Remote
+
+1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
+
+#### Local (development only)
+Run `raas` from the directory where the `raas.cfg` directory.
+
+1. Copy config file `cp raas.cfg.template raas.cfg`
+1. Edit `raas.cfg` config file.
+
+### AWS S3
+
+This tool uses the AWS Boto API. See [configuration documentation](http://boto.readthedocs.org/en/latest/boto_config_tut.html). Set two environment variables or create credentials file `~/.aws/credentials` with the following values:
+
+```
+[default]
+aws_access_key_id = YOUR_ACCESS_KEY_ID
+aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
+```
+
+## Running as container
+
+Instead of running on a dedicated host, the raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to manage and troubleshoot the registry without workstation dependencies.
+
+```
+[sudo] docker run -it --rm \
+              -e RAAS_CONF_REPO="ssh://user@git.example.com:22/private-raas-config" \
+              -e AWS_ACCESS_KEY_ID=<changeme> \
+              -e AWS_SECRET_ACCESS_KEY=<changeme> \
+              -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
+              -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
+              aweiteka/raas
+```
+This provides access to `raas`, `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` to add your username for the `rhc` client to work.
+

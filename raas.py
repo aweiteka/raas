@@ -814,9 +814,9 @@ def main():
             help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
     parser.add_argument('-n', '--nocommit', action='store_true',
                         help='Do not commit configuration. Development only.')
-    parser.add_argument('-c', '--configenv', metavar='BRANCH', default='master',
+    parser.add_argument('-c', '--configenv', metavar='BRANCH', default='stage',
                         choices=['dev', 'stage', 'master'],
-                        help='Working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Production default is "master"')
+                        help='Working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
     subparsers = parser.add_subparsers(help='sub-command help', dest='action')
     status_parser = subparsers.add_parser('status', help='Check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)

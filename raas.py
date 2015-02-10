@@ -885,6 +885,8 @@ def main():
         logging.critical('Failed to initialize AWS: {0}'.format(e))
         sys.exit(1)
 
+    ret = 0
+
     if args.action in 'status':
         status = True
         if args.pulp:
@@ -910,14 +912,17 @@ def main():
             print 'Status of "{0}" should be OK'.format(config.isv)
         else:
             print 'Failed to verify status of "{0}"'.format(config.isv)
+            ret = 1
 
     elif args.action in 'setup':
         try:
             aws.create_bucket()
             openshift.create_domain()
             openshift.create_app()
+            print 'ISV "{0}" was setup correctly'.format(config.isv)
         except Exception as e:
             logging.error('Failed to setup ISV: {0}'.format(e))
+            ret = 1
 
     elif args.action in 'publish':
         try:
@@ -986,6 +991,8 @@ def main():
         config.commit_all_changes()
 
     openshift.cleanup()
+
+    sys.exit(ret)
 
 
 if __name__ == '__main__':

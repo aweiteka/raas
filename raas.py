@@ -27,6 +27,7 @@ class PulpServer(object):
                  isv_app_name, redirect_url):
         self._upload_id = None
         self._repo_id = None
+        self._data_dir = None
         self.server_url = server_url
         self._username = username
         self._password = password
@@ -51,6 +52,13 @@ class PulpServer(object):
             self._server_url = val
         else:
             self._server_url = 'https://' + val
+
+    @property
+    def data_dir(self):
+        if not self._data_dir:
+            self._data_dir = mkdtemp()
+            logging.info('Created pulp data dir "{0}"'.format(self._data_dir))
+        return self._data_dir
 
     @property
     def repo_id(self):
@@ -107,7 +115,11 @@ class PulpServer(object):
         if 'spawned_tasks' in r_json:
             for task in r_json['spawned_tasks']:
                 logging.debug('Checking status of spawned task {0}'.format(task['task_id']))
-                self._call_pulp('{0}/{1}'.format(self.server_url, task['_href']))
+                task_json = self._call_pulp('{0}{1}'.format(self.server_url, task['_href']))
+                if task_json['state'] == 'error':
+                    if 'traceback' in task_json:
+                        logging.debug('Pulp task traceback:\n{0}'.format(task_json['traceback']))
+                    raise Exception('Pulp task failed: {0}'.format(task_json['error']['description']))
         return r_json
 
     def status(self):
@@ -166,9 +178,9 @@ class PulpServer(object):
         """Update distributor redirect URL and export file"""
         url = '{0}/pulp/api/v2/repositories/{1}/distributors/{2}/'.format(self.server_url, self.repo_id, self._export_distributor)
         payload = {
-          'distributor_config': {
-            'redirect-url': self._redirect_url
-          }
+                'distributor_config': {
+                        'redirect-url': self._redirect_url
+                }
         }
         logging.info('Update pulp repository "{0}" URL "{1}"'.format(self.repo_id, self._redirect_url))
         r_json = self._call_pulp(url, 'put', json.dumps(payload))
@@ -271,6 +283,15 @@ class PulpServer(object):
         if 'error_message' in r_json:
             raise Exception('Unable to list orphaned content type "{0}"'.format(content_type))
         return content
+
+    def download_image(self):
+        pass
+
+    def cleanup(self):
+        if self._data_dir:
+            logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
+            rmtree(self._data_dir)
+            self._app_local_dir = None
 
 
 class PulpTar(object):
@@ -671,7 +692,7 @@ class Configuration(object):
         self._pulp_repo = None
         self._config_branch = config_branch
         self.isv = isv
-        self._isv_app_name = isv_app_name
+        self.isv_app_name = isv_app_name
         self.file_upload = file_upload
         self.oodomain = oodomain
         self.ooapp = ooapp
@@ -718,6 +739,11 @@ class Configuration(object):
     @property
     def isv_app_name(self):
         return self._isv_app_name
+
+    @isv_app_name.setter
+    def isv_app_name(self, val):
+        self._isv_app_name = val
+        logging.debug('ISV app name set to "{0}"'.format(self.isv_app_name))
 
     @property
     def oodomain(self):
@@ -772,7 +798,7 @@ class Configuration(object):
         """Returns Pulp server redirect URL for S3 bucket"""
         return '/'.join([self._S3_URL,
                          self._parsed_config.get(self.isv, 's3_bucket'),
-                         self._parsed_config.get(self.isv, 'openshift_app')])
+                         self._isv_app_name])
 
     @property
     def pulp_conf(self):
@@ -956,6 +982,7 @@ def main():
             pulp.verify_repo()
             pulp.update_redirect_url()
             pulp.export_repo()
+            pulp.cleanup()
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))
             ret = 1

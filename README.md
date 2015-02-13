@@ -117,16 +117,6 @@ Run `raas` from the directory where the `raas.cfg` directory.
 1. Copy config file `cp raas.cfg.template raas.cfg`
 1. Edit `raas.cfg` config file.
 
-### AWS S3
-
-This tool uses the AWS Boto API. See [configuration documentation](http://boto.readthedocs.org/en/latest/boto_config_tut.html). Set two environment variables or create credentials file `~/.aws/credentials` with the following values:
-
-```
-[default]
-aws_access_key_id = YOUR_ACCESS_KEY_ID
-aws_secret_access_key = YOUR_SECRET_ACCESS_KEY
-```
-
 ## Running as container
 
 Instead of running on a dedicated host, the raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to manage and troubleshoot the registry without workstation dependencies.
@@ -134,8 +124,6 @@ Instead of running on a dedicated host, the raas tool is intended to be run as a
 ```
 [sudo] docker run -it --rm \
               -e RAAS_CONF_REPO="ssh://user@git.example.com:22/private-raas-config" \
-              -e AWS_ACCESS_KEY_ID=<changeme> \
-              -e AWS_SECRET_ACCESS_KEY=<changeme> \
               -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
               -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
               aweiteka/raas

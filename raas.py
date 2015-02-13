@@ -378,12 +378,12 @@ class RedHatMeta(object):
 class AwsS3(object):
     """Interact with AWS S3"""
 
-    def __init__(self, bucket_name, app_name):
+    def __init__(self, bucket_name, app_name, aws_key, aws_secret):
         self._bucket = None
         self._image_ids = set()
         self._bucket_name = bucket_name
         self._app_name = app_name
-        self._connect()
+        self._connect(aws_key, aws_secret)
         #self.images_dir = kwargs['images_dir']
         #self.mask_layers = kwargs['mask_layers']
 
@@ -405,9 +405,10 @@ class AwsS3(object):
             logging.info('AWS image ids: {0}'.format(self._image_ids))
         return self._image_ids
 
-    def _connect(self):
+    def _connect(self, aws_key, aws_secret):
         logging.info('Connecting to AWS')
-        self._conn = connect_s3()
+        self._conn = connect_s3(aws_access_key_id=aws_key,
+                                aws_secret_access_key=aws_secret)
 
     def verify_bucket(self):
         logging.info('Looking up bucket "{0}"'.format(self._bucket_name))
@@ -824,7 +825,9 @@ class Configuration(object):
     @property
     def aws_conf(self):
         return {'bucket_name': self._parsed_config.get(self.isv, 's3_bucket'),
-                'app_name'   : self._isv_app_name}
+                'app_name'   : self._isv_app_name,
+                'aws_key'    : self._parsed_config.get('aws', 'aws_access_key'),
+                'aws_secret' : self._parsed_config.get('aws', 'aws_secret_access_key')}
 
     @property
     def redhat_meta_conf(self):

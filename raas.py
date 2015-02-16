@@ -28,6 +28,7 @@ class PulpServer(object):
         self._upload_id = None
         self._repo_id = None
         self._data_dir = None
+        self._exported_local_file = None
         self.server_url = server_url
         self._username = username
         self._password = password
@@ -67,6 +68,12 @@ class PulpServer(object):
         return self._repo_id
 
     @property
+    def exported_local_file(self):
+        if not self._exported_local_file:
+            self._exported_local_file = os.path.join(self.data_dir, self.repo_id + '.tar')
+        return self._exported_local_file
+
+    @property
     def upload_id(self):
         """Get a pulp upload ID"""
         if not self._upload_id:
@@ -78,10 +85,10 @@ class PulpServer(object):
             logging.info('Received pulp upload ID: {0}'.format(self._upload_id))
         return self._upload_id
 
-    def _call_pulp(self, url, req_type='get', payload=None):
+    def _call_pulp(self, url, req_type='get', payload=None, return_json=True, p_stream=False):
         if req_type == 'get':
             logging.info('Calling Pulp URL "{0}"'.format(url))
-            r = requests.get(url, auth=(self._username, self._password), verify=self._verify_ssl)
+            r = requests.get(url, auth=(self._username, self._password), verify=self._verify_ssl, stream=p_stream)
         elif req_type == 'post':
             logging.info('Posting to Pulp URL "{0}"'.format(url))
             if payload:
@@ -96,31 +103,33 @@ class PulpServer(object):
             r = requests.delete(url, auth=(self._username, self._password), verify=self._verify_ssl)
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
-        r_json = r.json()
 
         logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
 
         if r.status_code >= 400:
             raise Exception('Received invalid status code: {0}'.format(r.status_code))
 
-        # some requests return null
-        if not r_json:
+        if return_json:
+            r_json = r.json()
+            # some requests return null
+            if not r_json:
+                return r_json
+            logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
+
+            if 'error_message' in r_json:
+                logging.warn('Error messages from Pulp response:\n{0}'.format(r_json['error_message']))
+
+            if 'spawned_tasks' in r_json:
+                for task in r_json['spawned_tasks']:
+                    logging.debug('Checking status of spawned task {0}'.format(task['task_id']))
+                    task_json = self._call_pulp('{0}{1}'.format(self.server_url, task['_href']))
+                    if task_json['state'] == 'error':
+                        if 'traceback' in task_json:
+                            logging.debug('Pulp task traceback:\n{0}'.format(task_json['traceback']))
+                        raise Exception('Pulp task failed: {0}'.format(task_json['error']['description']))
             return r_json
-
-        logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
-
-        if 'error_message' in r_json:
-            logging.warn('Error messages from Pulp response:\n{0}'.format(r_json['error_message']))
-
-        if 'spawned_tasks' in r_json:
-            for task in r_json['spawned_tasks']:
-                logging.debug('Checking status of spawned task {0}'.format(task['task_id']))
-                task_json = self._call_pulp('{0}{1}'.format(self.server_url, task['_href']))
-                if task_json['state'] == 'error':
-                    if 'traceback' in task_json:
-                        logging.debug('Pulp task traceback:\n{0}'.format(task_json['traceback']))
-                    raise Exception('Pulp task failed: {0}'.format(task_json['error']['description']))
-        return r_json
+        else:
+            return r
 
     def status(self):
         """Check pulp server status"""
@@ -284,8 +293,16 @@ class PulpServer(object):
             raise Exception('Unable to list orphaned content type "{0}"'.format(content_type))
         return content
 
-    def download_image(self):
-        pass
+    def download_repo(self):
+        url = '{0}/pulp/docker/{1}.tar'.format(self.server_url, self.repo_id)
+        r = self._call_pulp(url, 'get', return_json=False, p_stream=True)
+        with open(self.exported_local_file, 'wb') as fd:
+            for chunk in r.iter_content(self._chunk_size):
+                fd.write(chunk)
+        logging.info('Exported repo downloaded to "{0}"'.format(self.exported_local_file))
+        with tarfile.open(self.exported_local_file) as tar:
+            tar.extractall(self.data_dir)
+        logging.info('Downloaded repo extracted to "{0}"'.format(self.data_dir))
 
     def cleanup(self):
         if self._data_dir:
@@ -985,6 +1002,7 @@ def main():
             pulp.verify_repo()
             pulp.update_redirect_url()
             pulp.export_repo()
+            pulp.download_repo()
             pulp.cleanup()
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))

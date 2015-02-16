@@ -15,9 +15,8 @@ from boto import s3
 from ConfigParser import ConfigParser
 from git import Repo
 from glob import glob
-from tempfile import mkdtemp, NamedTemporaryFile
+from tempfile import mkdtemp
 from time import sleep
-from urlparse import urlsplit
 
 
 class PulpServer(object):
@@ -335,61 +334,6 @@ class PulpServer(object):
             self._app_local_dir = None
 
 
-class PulpTar(object):
-    """Models tarfile exported from Pulp"""
-    def __init__(self, tarfile):
-        self.tarfile = tarfile
-        self.tar_tempdir = mkdtemp()
-
-    @property
-    def docker_images_dir(self):
-        """Temp dir of docker images"""
-        return self.tar_tempdir + '/web'
-
-    @property
-    def crane_metadata_file(self):
-        """Full path to crane metadata file"""
-        json_files = glob(self.tar_tempdir + '/*.json')
-        if len(json_files) == 1:
-            return json_files[0]
-        else:
-            print 'More than one metadata file found'
-            exit(1)
-
-    def extract_tar(self, image_tarfile):
-        """Extract tarfile into temp dir"""
-        tar = tarfile.open(image_tarfile)
-        tar.extractall(path=self.tar_tempdir)
-        print 'Extracted tarfile to %s' % self.tar_tempdir
-        print self.crane_metadata_file
-        tar.close()
-
-    def get_tarfile(self):
-        """Get a tarfile plus json metadata from url or local file"""
-        parts = urlsplit(self.tarfile)
-        if not parts.scheme or not parts.netloc:
-            print 'Using local file %s' % self.tarfile
-            self.extract_tar(self.tarfile)
-        else:
-            from urllib2 import Request, urlopen, URLError
-            req = Request(self.tarfile)
-            try:
-                print 'Fetching file via URL %s' % self.tarfile
-                response = urlopen(req)
-            except URLError as e:
-                if hasattr(e, 'reason'):
-                    print 'We failed to reach a server.'
-                    print 'Reason: ', e.reason
-                elif hasattr(e, 'code'):
-                    print 'The server couldn\'t fulfill the request.'
-                    print 'Error code: ', e.code
-            else:
-                raw_tarfile = NamedTemporaryFile(mode='wb', suffix='.tar')
-                raw_tarfile.write(response.read())
-                print 'Write file %s from URL' % raw_tarfile.name
-                self.extract_tar(raw_tarfile.name)
-
-
 class RedHatMeta(object):
     """Information on Red Hat docker images"""
 
@@ -425,8 +369,6 @@ class AwsS3(object):
         self._bucket_name = bucket_name
         self._app_name = app_name
         self._connect(aws_key, aws_secret)
-        #self.images_dir = kwargs['images_dir']
-        #self.mask_layers = kwargs['mask_layers']
 
     @property
     def bucket_name(self):
@@ -1026,21 +968,6 @@ def main():
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))
             ret = 1
-
-        #mask_layers = conf_file.get('redhat', 'mask_layers')
-        #mask_layers = re.split(',| |\n', mask_layers.strip())
-        #pulptar = PulpTar(args.tarfile)
-        #pulptar.get_tarfile()
-        #cranefile = pulptar.crane_metadata_file
-        #kwargs = {'bucket_name': args.bucket_name,
-        #          'app_name': args.app_name,
-        #          'images_dir': pulptar.docker_images_dir,
-        #          'mask_layers': mask_layers}
-        #s3 = AwsS3(**kwargs)
-        #files = s3.walk_dir(pulptar.docker_images_dir)
-        #s3.upload_layers(files)
-        #os = Openshift(**conf_file._sections['openshift'])
-        #os.create_app()
 
     elif args.action in 'pulp-upload':
         try:

@@ -718,7 +718,10 @@ class Configuration(object):
 
     @isv_app_name.setter
     def isv_app_name(self, val):
-        self._isv_app_name = val.replace('/', '-')
+        if val:
+            self._isv_app_name = val.replace('/', '-')
+        else:
+            self._isv_app_name = None
         logging.debug('ISV app name set to "{0}"'.format(self.isv_app_name))
 
     @property

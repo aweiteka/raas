@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import requests
+import shutil
 import sys
 import tarfile
 
@@ -14,7 +15,6 @@ from boto import s3
 from ConfigParser import ConfigParser
 from git import Repo
 from glob import glob
-from shutil import rmtree
 from tempfile import mkdtemp, NamedTemporaryFile
 from time import sleep
 from urlparse import urlsplit
@@ -72,6 +72,10 @@ class PulpServer(object):
         if not self._exported_local_file:
             self._exported_local_file = os.path.join(self.data_dir, self.repo_id + '.tar')
         return self._exported_local_file
+
+    @property
+    def crane_config_file(self):
+        return os.path.join(self.data_dir, self.repo_id + '.json')
 
     @property
     def upload_id(self):
@@ -313,7 +317,7 @@ class PulpServer(object):
         # Walk the directory to get all the files to be uploaded
         for dirpath, _, filenames in os.walk(os.path.join(self.data_dir, 'web')):
             for filename in filenames:
-                layer_id = dirpath.split(os.sep)[-1]
+                layer_id = os.path.basename(dirpath.rstrip(os.sep))
                 if layer_id in redhat_images:
                     logging.info('Skipping Red Hat layer "{0}"'.format(layer_id))
                     continue
@@ -327,7 +331,7 @@ class PulpServer(object):
     def cleanup(self):
         if self._data_dir:
             logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
-            rmtree(self._data_dir)
+            shutil.rmtree(self._data_dir)
             self._app_local_dir = None
 
 
@@ -408,7 +412,7 @@ class RedHatMeta(object):
                     for i in data['images']:
                         self._image_ids.add(i['id'])
             logging.debug('Red Hat image IDs: {0}'.format(self._image_ids))
-            rmtree(tmpdir)
+            shutil.rmtree(tmpdir)
         return self._image_ids
 
 
@@ -605,7 +609,7 @@ class Openshift(object):
         logging.info('Restarting application..')
         payload = {'event': 'restart'}
         r_json = self._call_openshift(self.app_data['links']['RESTART']['href'],
-                                      'post', payload)
+                'post', payload)
         if r_json['status'] != 'ok':
             raise Exception('Failed to restart Openshift app')
 
@@ -686,10 +690,22 @@ class Openshift(object):
             sleep(5)
             self.verify_app()
 
+    def update_app(self, data_file):
+        self.verify_app()
+        self.clone_app()
+        logging.info('Updating Openshift crane app')
+        shutil.copy(data_file, os.path.join(self.app_local_dir, 'crane', 'data'))
+        logging.info(os.path.join('crane', 'data', os.path.basename(data_file)))
+        self._app_repo.index.add([os.path.join('crane', 'data', os.path.basename(data_file))])
+        self._app_repo.index.commit('Updated crane configuration')
+        self._app_repo.remotes.origin.push()
+        sleep(5)
+        self.verify_app()
+
     def cleanup(self):
         if self._app_local_dir:
             logging.info('Removing local Openshift app dir "{0}"'.format(self._app_local_dir))
-            rmtree(self._app_local_dir)
+            shutil.rmtree(self._app_local_dir)
             self._app_local_dir = None
 
 
@@ -1005,6 +1021,7 @@ def main():
             pulp.export_repo()
             pulp.download_repo()
             aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
+            openshift.update_app(pulp.crane_config_file)
             pulp.cleanup()
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))

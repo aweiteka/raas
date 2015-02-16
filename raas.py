@@ -5,19 +5,18 @@ import logging
 import os
 import re
 import requests
+import shutil
 import sys
 import tarfile
 
 from argparse import ArgumentParser
 from boto import connect_s3
-from boto.s3.key import Key
+from boto import s3
 from ConfigParser import ConfigParser
 from git import Repo
 from glob import glob
-from shutil import rmtree
-from tempfile import mkdtemp, NamedTemporaryFile
+from tempfile import mkdtemp
 from time import sleep
-from urlparse import urlsplit
 
 
 class PulpServer(object):
@@ -64,7 +63,7 @@ class PulpServer(object):
     @property
     def repo_id(self):
         if not self._repo_id and self._isv_app_name:
-            self._repo_id = '-'.join([self._isv, self._isv_app_name.replace('/', '-')])
+            self._repo_id = '-'.join([self._isv, self._isv_app_name])
         return self._repo_id
 
     @property
@@ -72,6 +71,10 @@ class PulpServer(object):
         if not self._exported_local_file:
             self._exported_local_file = os.path.join(self.data_dir, self.repo_id + '.tar')
         return self._exported_local_file
+
+    @property
+    def crane_config_file(self):
+        return os.path.join(self.data_dir, self.repo_id + '.json')
 
     @property
     def upload_id(self):
@@ -304,66 +307,31 @@ class PulpServer(object):
             tar.extractall(self.data_dir)
         logging.info('Downloaded repo extracted to "{0}"'.format(self.data_dir))
 
+    def files_for_aws(self, redhat_images):
+        """Return list of tuples of files from pulp to be uploaded to aws.
+
+        Format of returned list: [(layer_id/file1, full_file_path1), ...]
+        """
+        files = []
+        # Walk the directory to get all the files to be uploaded
+        for dirpath, _, filenames in os.walk(os.path.join(self.data_dir, 'web')):
+            for filename in filenames:
+                layer_id = os.path.basename(dirpath.rstrip(os.sep))
+                if layer_id in redhat_images:
+                    logging.info('Skipping Red Hat layer "{0}"'.format(layer_id))
+                    continue
+                fname = '/'.join([layer_id, filename])
+                files.append((fname, os.path.join(dirpath, filename)))
+                logging.debug('File "{0}" queued for upload to AWS'.format(fname))
+        if not files:
+            raise Exception('No files to upload to AWS')
+        return files
+
     def cleanup(self):
         if self._data_dir:
             logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
-            rmtree(self._data_dir)
+            shutil.rmtree(self._data_dir)
             self._app_local_dir = None
-
-
-class PulpTar(object):
-    """Models tarfile exported from Pulp"""
-    def __init__(self, tarfile):
-        self.tarfile = tarfile
-        self.tar_tempdir = mkdtemp()
-
-    @property
-    def docker_images_dir(self):
-        """Temp dir of docker images"""
-        return self.tar_tempdir + '/web'
-
-    @property
-    def crane_metadata_file(self):
-        """Full path to crane metadata file"""
-        json_files = glob(self.tar_tempdir + '/*.json')
-        if len(json_files) == 1:
-            return json_files[0]
-        else:
-            print 'More than one metadata file found'
-            exit(1)
-
-    def extract_tar(self, image_tarfile):
-        """Extract tarfile into temp dir"""
-        tar = tarfile.open(image_tarfile)
-        tar.extractall(path=self.tar_tempdir)
-        print 'Extracted tarfile to %s' % self.tar_tempdir
-        print self.crane_metadata_file
-        tar.close()
-
-    def get_tarfile(self):
-        """Get a tarfile plus json metadata from url or local file"""
-        parts = urlsplit(self.tarfile)
-        if not parts.scheme or not parts.netloc:
-            print 'Using local file %s' % self.tarfile
-            self.extract_tar(self.tarfile)
-        else:
-            from urllib2 import Request, urlopen, URLError
-            req = Request(self.tarfile)
-            try:
-                print 'Fetching file via URL %s' % self.tarfile
-                response = urlopen(req)
-            except URLError as e:
-                if hasattr(e, 'reason'):
-                    print 'We failed to reach a server.'
-                    print 'Reason: ', e.reason
-                elif hasattr(e, 'code'):
-                    print 'The server couldn\'t fulfill the request.'
-                    print 'Error code: ', e.code
-            else:
-                raw_tarfile = NamedTemporaryFile(mode='wb', suffix='.tar')
-                raw_tarfile.write(response.read())
-                print 'Write file %s from URL' % raw_tarfile.name
-                self.extract_tar(raw_tarfile.name)
 
 
 class RedHatMeta(object):
@@ -387,8 +355,8 @@ class RedHatMeta(object):
                     logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(filename, json.dumps(data, indent=2)))
                     for i in data['images']:
                         self._image_ids.add(i['id'])
-            logging.info('Red Hat image IDs: {0}'.format(self._image_ids))
-            rmtree(tmpdir)
+            logging.debug('Red Hat image IDs: {0}'.format(self._image_ids))
+            shutil.rmtree(tmpdir)
         return self._image_ids
 
 
@@ -401,8 +369,6 @@ class AwsS3(object):
         self._bucket_name = bucket_name
         self._app_name = app_name
         self._connect(aws_key, aws_secret)
-        #self.images_dir = kwargs['images_dir']
-        #self.mask_layers = kwargs['mask_layers']
 
     @property
     def bucket_name(self):
@@ -449,39 +415,19 @@ class AwsS3(object):
             logging.info('Bucket "{0}" already exists'.format(self.bucket_name))
         except Exception:
             logging.info('Creating bucket "{0}"'.format(self.bucket_name))
-            self._conn.create_bucket(self.bucket_name)
+            self._bucket = self._conn.create_bucket(self.bucket_name)
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
-        s3 = connect_s3()
-        bucket = s3.create_bucket(self.bucket)
-        print 'Created S3 bucket %s' % self.bucket
-        print 'Uploading image layers to S3'
-        for f, path in files:
-            with open(f, 'rb') as f:
-                dest = os.path.join((self.app), path)
-                key = Key(bucket=bucket, name=dest)
+        logging.info('Uploading files to bucket "{0}"'.format(self._bucket_name))
+        for name, path in files:
+            with open(path, 'rb') as f:
+                dest = '/'.join([self._app_name, name])
+                key = s3.key.Key(bucket=self.bucket, name=dest)
                 key.set_contents_from_file(f, replace=True)
                 key.set_acl('public-read')
-                print 'Successfully uploaded to %s:%s' % (bucket, dest)
-
-    def walk_dir(self, layer_dir):
-        """Walk image directory, return list of tuples"""
-        files = []
-        if os.path.isdir(layer_dir):
-            # Walk the directory to get all the files to be uploaded
-            for dirpath, _, filenames in os.walk(layer_dir):
-                for filename in filenames:
-                    layer_id = dirpath.split('/')
-                    if layer_id[-1] in self.mask_layers:
-                        print 'Skipping layer %s' % layer_id[-1]
-                        continue
-                    filename = os.path.join(dirpath, filename)
-                    files.append((filename, os.path.relpath(filename, layer_dir)))
-        else:
-            assert os.path.exists(layer_dir), '%s does not exist' % layer_dir
-            files.append((layer_dir, os.path.basename(layer_dir)))
-        return files
+                logging.debug('Uploaded file "{0}"'.format(dest))
+        logging.info('All files uploaded to AWS')
 
 
 class Openshift(object):
@@ -605,7 +551,7 @@ class Openshift(object):
         logging.info('Restarting application..')
         payload = {'event': 'restart'}
         r_json = self._call_openshift(self.app_data['links']['RESTART']['href'],
-                                      'post', payload)
+                'post', payload)
         if r_json['status'] != 'ok':
             raise Exception('Failed to restart Openshift app')
 
@@ -686,10 +632,22 @@ class Openshift(object):
             sleep(5)
             self.verify_app()
 
+    def update_app(self, data_file):
+        self.verify_app()
+        self.clone_app()
+        logging.info('Updating Openshift crane app')
+        shutil.copy(data_file, os.path.join(self.app_local_dir, 'crane', 'data'))
+        logging.info(os.path.join('crane', 'data', os.path.basename(data_file)))
+        self._app_repo.index.add([os.path.join('crane', 'data', os.path.basename(data_file))])
+        self._app_repo.index.commit('Updated crane configuration')
+        self._app_repo.remotes.origin.push()
+        sleep(5)
+        self.verify_app()
+
     def cleanup(self):
         if self._app_local_dir:
             logging.info('Removing local Openshift app dir "{0}"'.format(self._app_local_dir))
-            rmtree(self._app_local_dir)
+            shutil.rmtree(self._app_local_dir)
             self._app_local_dir = None
 
 
@@ -760,7 +718,7 @@ class Configuration(object):
 
     @isv_app_name.setter
     def isv_app_name(self, val):
-        self._isv_app_name = val
+        self._isv_app_name = val.replace('/', '-')
         logging.debug('ISV app name set to "{0}"'.format(self.isv_app_name))
 
     @property
@@ -998,30 +956,18 @@ def main():
     elif args.action in 'publish':
         try:
             pulp = PulpServer(**config.pulp_conf)
+            rhmeta = RedHatMeta(**config.redhat_meta_conf)
             pulp.status()
             pulp.verify_repo()
             pulp.update_redirect_url()
             pulp.export_repo()
             pulp.download_repo()
+            aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
+            openshift.update_app(pulp.crane_config_file)
             pulp.cleanup()
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))
             ret = 1
-
-        #mask_layers = conf_file.get('redhat', 'mask_layers')
-        #mask_layers = re.split(',| |\n', mask_layers.strip())
-        #pulptar = PulpTar(args.tarfile)
-        #pulptar.get_tarfile()
-        #cranefile = pulptar.crane_metadata_file
-        #kwargs = {'bucket_name': args.bucket_name,
-        #          'app_name': args.app_name,
-        #          'images_dir': pulptar.docker_images_dir,
-        #          'mask_layers': mask_layers}
-        #s3 = AwsS3(**kwargs)
-        #files = s3.walk_dir(pulptar.docker_images_dir)
-        #s3.upload_layers(files)
-        #os = Openshift(**conf_file._sections['openshift'])
-        #os.create_app()
 
     elif args.action in 'pulp-upload':
         try:

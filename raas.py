@@ -10,7 +10,7 @@ import tarfile
 
 from argparse import ArgumentParser
 from boto import connect_s3
-from boto.s3.key import Key
+from boto import s3
 from ConfigParser import ConfigParser
 from git import Repo
 from glob import glob
@@ -64,7 +64,7 @@ class PulpServer(object):
     @property
     def repo_id(self):
         if not self._repo_id and self._isv_app_name:
-            self._repo_id = '-'.join([self._isv, self._isv_app_name.replace('/', '-')])
+            self._repo_id = '-'.join([self._isv, self._isv_app_name])
         return self._repo_id
 
     @property
@@ -304,6 +304,26 @@ class PulpServer(object):
             tar.extractall(self.data_dir)
         logging.info('Downloaded repo extracted to "{0}"'.format(self.data_dir))
 
+    def files_for_aws(self, redhat_images):
+        """Return list of tuples of files from pulp to be uploaded to aws.
+
+        Format of returned list: [(layer_id/file1, full_file_path1), ...]
+        """
+        files = []
+        # Walk the directory to get all the files to be uploaded
+        for dirpath, _, filenames in os.walk(os.path.join(self.data_dir, 'web')):
+            for filename in filenames:
+                layer_id = dirpath.split(os.sep)[-1]
+                if layer_id in redhat_images:
+                    logging.info('Skipping Red Hat layer "{0}"'.format(layer_id))
+                    continue
+                fname = '/'.join([layer_id, filename])
+                files.append((fname, os.path.join(dirpath, filename)))
+                logging.debug('File "{0}" queued for upload to AWS'.format(fname))
+        if not files:
+            raise Exception('No files to upload to AWS')
+        return files
+
     def cleanup(self):
         if self._data_dir:
             logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
@@ -387,7 +407,7 @@ class RedHatMeta(object):
                     logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(filename, json.dumps(data, indent=2)))
                     for i in data['images']:
                         self._image_ids.add(i['id'])
-            logging.info('Red Hat image IDs: {0}'.format(self._image_ids))
+            logging.debug('Red Hat image IDs: {0}'.format(self._image_ids))
             rmtree(tmpdir)
         return self._image_ids
 
@@ -449,39 +469,19 @@ class AwsS3(object):
             logging.info('Bucket "{0}" already exists'.format(self.bucket_name))
         except Exception:
             logging.info('Creating bucket "{0}"'.format(self.bucket_name))
-            self._conn.create_bucket(self.bucket_name)
+            self._bucket = self._conn.create_bucket(self.bucket_name)
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
-        s3 = connect_s3()
-        bucket = s3.create_bucket(self.bucket)
-        print 'Created S3 bucket %s' % self.bucket
-        print 'Uploading image layers to S3'
-        for f, path in files:
-            with open(f, 'rb') as f:
-                dest = os.path.join((self.app), path)
-                key = Key(bucket=bucket, name=dest)
+        logging.info('Uploading files to bucket "{0}"'.format(self._bucket_name))
+        for name, path in files:
+            with open(path, 'rb') as f:
+                dest = '/'.join([self._app_name, name])
+                key = s3.key.Key(bucket=self.bucket, name=dest)
                 key.set_contents_from_file(f, replace=True)
                 key.set_acl('public-read')
-                print 'Successfully uploaded to %s:%s' % (bucket, dest)
-
-    def walk_dir(self, layer_dir):
-        """Walk image directory, return list of tuples"""
-        files = []
-        if os.path.isdir(layer_dir):
-            # Walk the directory to get all the files to be uploaded
-            for dirpath, _, filenames in os.walk(layer_dir):
-                for filename in filenames:
-                    layer_id = dirpath.split('/')
-                    if layer_id[-1] in self.mask_layers:
-                        print 'Skipping layer %s' % layer_id[-1]
-                        continue
-                    filename = os.path.join(dirpath, filename)
-                    files.append((filename, os.path.relpath(filename, layer_dir)))
-        else:
-            assert os.path.exists(layer_dir), '%s does not exist' % layer_dir
-            files.append((layer_dir, os.path.basename(layer_dir)))
-        return files
+                logging.debug('Uploaded file "{0}"'.format(dest))
+        logging.info('All files uploaded to AWS')
 
 
 class Openshift(object):
@@ -760,7 +760,7 @@ class Configuration(object):
 
     @isv_app_name.setter
     def isv_app_name(self, val):
-        self._isv_app_name = val
+        self._isv_app_name = val.replace('/', '-')
         logging.debug('ISV app name set to "{0}"'.format(self.isv_app_name))
 
     @property
@@ -998,11 +998,13 @@ def main():
     elif args.action in 'publish':
         try:
             pulp = PulpServer(**config.pulp_conf)
+            rhmeta = RedHatMeta(**config.redhat_meta_conf)
             pulp.status()
             pulp.verify_repo()
             pulp.update_redirect_url()
             pulp.export_repo()
             pulp.download_repo()
+            aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
             pulp.cleanup()
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))

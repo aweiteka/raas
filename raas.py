@@ -335,24 +335,41 @@ class PulpServer(object):
         if self._data_dir:
             logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
             shutil.rmtree(self._data_dir)
-            self._app_local_dir = None
+            self._data_dir = None
 
 
 class RedHatMeta(object):
     """Information on Red Hat docker images"""
 
     def __init__(self, git_repo_url, relpath):
+        self._data_dir = None
+        self._repo = None
         self._image_ids = set()
         self._repo_url = git_repo_url
         self._relpath = relpath
 
     @property
+    def data_dir(self):
+        if not self._data_dir:
+            self._data_dir = mkdtemp()
+            logging.info('Created Red Hat meta data dir "{0}"'.format(self._data_dir))
+        return self._data_dir
+
+    @property
+    def redhat_meta_files(self):
+        self._clone_repo()
+        glob_path = os.path.join(self.data_dir, self._relpath) + os.sep + '*.json'
+        logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
+        rhmeta_files = glob(glob_path)
+#         if not rhmeta_files:
+#             raise Exception('No Red Hat meta files found')
+        logging.debug('Found Red Hat meta files: {0}'.format(rhmeta_files))
+        return rhmeta_files
+
+    @property
     def image_ids(self):
         if not self._image_ids:
-            tmpdir = mkdtemp()
-            Repo.clone_from(self._repo_url, tmpdir)
-            logging.info('Red Hat meta git cloned to "{0}"'.format(tmpdir))
-            for filename in glob(os.path.join(tmpdir, self._relpath) + os.sep + '*.json'):
+            for filename in self.redhat_meta_files:
                 logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
                 with open(filename) as f:
                     data = json.load(f)
@@ -360,8 +377,19 @@ class RedHatMeta(object):
                     for i in data['images']:
                         self._image_ids.add(i['id'])
             logging.debug('Red Hat image IDs: {0}'.format(self._image_ids))
-            shutil.rmtree(tmpdir)
         return self._image_ids
+
+    def _clone_repo(self):
+        if not self._repo:
+            self._repo = Repo.clone_from(self._repo_url, self.data_dir)
+            logging.info('Red Hat meta git cloned to "{0}"'.format(self.data_dir))
+
+    def cleanup(self):
+        if self._data_dir:
+            logging.info('Removing Red Hat meta data dir "{0}"'.format(self._data_dir))
+            shutil.rmtree(self._data_dir)
+            self._data_dir = None
+            self._repo = None
 
 
 class AwsS3(object):
@@ -614,7 +642,7 @@ class Openshift(object):
             if r_json['status'] != 'created':
                 raise Exception('Domain "{0}" could not be created'.format(self.domain))
 
-    def create_app(self):
+    def create_app(self, redhat_meta=None):
         """Create an Openshift application"""
         try:
             self.verify_app()
@@ -634,15 +662,26 @@ class Openshift(object):
             self._set_env_vars()
             self._restart_app()
             sleep(5)
-            self.verify_app()
+            if redhat_meta:
+                self.update_app(redhat_meta)
+            else:
+                self.verify_app()
 
-    def update_app(self, data_file):
+    def update_app(self, data_files):
+        """Copy all config data_files to the crane/data directory"""
+        if not data_files:
+            logging.info('No configuration data supplied')
+            return
         self.verify_app()
         self.clone_app()
-        logging.info('Updating Openshift crane app')
-        shutil.copy(data_file, os.path.join(self.app_local_dir, 'crane', 'data'))
-        logging.info(os.path.join('crane', 'data', os.path.basename(data_file)))
-        self._app_repo.index.add([os.path.join('crane', 'data', os.path.basename(data_file))])
+        logging.info('Updating Openshift crane app configuration')
+        dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
+        dest_dir_rel = os.path.join('crane', 'data')
+        files_to_add = []
+        for i in data_files:
+            shutil.copy(i, dest_dir)
+            files_to_add.append(os.path.join(dest_dir_rel, os.path.basename(i)))
+        self._app_repo.index.add(files_to_add)
         self._app_repo.index.commit('Updated crane configuration')
         self._app_repo.remotes.origin.push()
         sleep(5)
@@ -779,9 +818,12 @@ class Configuration(object):
     @property
     def _pulp_redirect_url(self):
         """Returns Pulp server redirect URL for S3 bucket"""
-        return '/'.join([self._S3_URL,
-                         self._parsed_config.get(self.isv, 's3_bucket'),
-                         self._isv_app_name])
+        if self._isv_app_name:
+            return '/'.join([self._S3_URL,
+                             self._parsed_config.get(self.isv, 's3_bucket'),
+                             self._isv_app_name])
+        else:
+            return None
 
     @property
     def pulp_conf(self):
@@ -920,13 +962,24 @@ def main():
         logging.critical('Failed to initialize AWS: {0}'.format(e))
         sys.exit(1)
 
+    try:
+        pulp = PulpServer(**config.pulp_conf)
+    except Exception as e:
+        logging.critical('Failed to initialize Pulp: {0}'.format(e))
+        sys.exit(1)
+
+    try:
+        rhmeta = RedHatMeta(**config.redhat_meta_conf)
+    except Exception as e:
+        logging.critical('Failed to initialize Red Hat Meta class: {0}'.format(e))
+        sys.exit(1)
+
     ret = 0
 
     if args.action in 'status':
         status = True
         if args.pulp:
             try:
-                pulp = PulpServer(**config.pulp_conf)
                 pulp.status()
                 pulp.remove_orphan_content()
             except Exception as e:
@@ -953,7 +1006,7 @@ def main():
         try:
             aws.create_bucket()
             openshift.create_domain()
-            openshift.create_app()
+            openshift.create_app(rhmeta.redhat_meta_files)
             print 'ISV "{0}" was setup correctly'.format(config.isv)
         except Exception as e:
             logging.error('Failed to setup ISV: {0}'.format(e))
@@ -961,23 +1014,19 @@ def main():
 
     elif args.action in 'publish':
         try:
-            pulp = PulpServer(**config.pulp_conf)
-            rhmeta = RedHatMeta(**config.redhat_meta_conf)
             pulp.status()
             pulp.verify_repo()
             pulp.update_redirect_url()
             pulp.export_repo()
             pulp.download_repo()
             aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
-            openshift.update_app(pulp.crane_config_file)
-            pulp.cleanup()
+            openshift.update_app([pulp.crane_config_file])
         except Exception as e:
             logging.error('Failed to publish image from Pulp: {0}'.format(e))
             ret = 1
 
     elif args.action in 'pulp-upload':
         try:
-            pulp = PulpServer(**config.pulp_conf)
             pulp.status()
         except Exception as e:
             logging.error('Failed to initialize Pulp: {0}'.format(e))
@@ -1001,6 +1050,8 @@ def main():
         config.commit_all_changes()
 
     openshift.cleanup()
+    pulp.cleanup()
+    rhmeta.cleanup()
 
     sys.exit(ret)
 

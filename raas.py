@@ -437,15 +437,14 @@ class AwsS3(object):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, username, password, domain, app_name,
+    def __init__(self, server_url, token, domain, app_name,
                  app_git_url, cartridge, isv_app_name):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
         self._image_ids = set()
         self._server_url = server_url
-        self._username = username
-        self._password = password
+        self._token = token
         self._domain = domain
         self._app_name = app_name
         self._app_git_url = app_git_url
@@ -515,14 +514,15 @@ class Openshift(object):
                 ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
 
     def _call_openshift(self, url, req_type='get', payload=None):
+        headers = {'authorization': 'Bearer ' + self._token}
         if not url.startswith(self._server_url):
             url = '{0}/{1}'.format(self._server_url, url)
         if req_type == 'get':
             logging.info('Calling Openshift URL "{0}"'.format(url))
-            r = requests.get(url, auth=(self._username, self._password))
+            r = requests.get(url, headers=headers)
         elif req_type == 'post':
             logging.info('Posting to Openshift URL "{0}"'.format(url))
-            r = requests.post(url, auth=(self._username, self._password), data=payload)
+            r = requests.post(url, headers=headers, data=payload)
         else:
             raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
         r_json = r.json()
@@ -796,8 +796,7 @@ class Configuration(object):
     @property
     def openshift_conf(self):
         return {'server_url'  : self._parsed_config.get('openshift', 'server_url'),
-                'username'    : self._parsed_config.get('openshift', 'username'),
-                'password'    : self._parsed_config.get('openshift', 'password'),
+                'token'       : self._parsed_config.get('openshift', 'token'),
                 'domain'      : self._parsed_config.get(self.isv, 'openshift_domain'),
                 'app_name'    : self._parsed_config.get(self.isv, 'openshift_app'),
                 'app_git_url' : self._parsed_config.get('openshift', 'app_git_url'),

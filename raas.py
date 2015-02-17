@@ -170,12 +170,14 @@ class PulpServer(object):
         'distributors': [{
             'distributor_type_id': 'docker_distributor_web',
             'distributor_id': self._web_distributor,
-            'repo-registry-id': self._isv_app_name,
+            'config': {
+                'repo-registry-id': self._isv_app_name},
             'auto_publish': 'true'},
             {
             'distributor_type_id': 'docker_distributor_export',
             'distributor_id': self._export_distributor,
-            'repo-registry-id': self._isv_app_name,
+            'config': {
+                'repo-registry-id': self._isv_app_name},
             'docker_publish_directory': self._export_dir,
             'auto_publish': 'true'}
             ]
@@ -188,10 +190,12 @@ class PulpServer(object):
 
     def update_redirect_url(self):
         """Update distributor redirect URL and export file"""
-        url = '{0}/pulp/api/v2/repositories/{1}/distributors/{2}/'.format(self.server_url, self.repo_id, self._export_distributor)
+        url = '{0}/pulp/api/v2/repositories/{1}/'.format(self.server_url, self.repo_id)
         payload = {
-                'distributor_config': {
-                        'redirect-url': self._redirect_url
+                'distributor_configs': {
+                        self._export_distributor: {
+                            'redirect-url': self._redirect_url
+                        }
                 }
         }
         logging.info('Update pulp repository "{0}" URL "{1}"'.format(self.repo_id, self._redirect_url))

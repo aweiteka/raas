@@ -13,6 +13,7 @@ from argparse import ArgumentParser
 from boto import connect_s3
 from boto import s3
 from ConfigParser import ConfigParser
+from datetime import date
 from git import Repo
 from glob import glob
 from tempfile import mkdtemp
@@ -857,6 +858,10 @@ class Configuration(object):
         return {'git_repo_url': self._parsed_config.get('redhat', 'metadata_repo'),
                 'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
+    @property
+    def logfile(self):
+        return os.path.join(self._logdir, date.today().isoformat() + '.log')
+
     def commit_all_changes(self):
         # NOTE: we will use the branch specified in self.config_branch
         #self._config_repo._index.add(FIXME)
@@ -865,14 +870,14 @@ class Configuration(object):
         raise NotImplemented()
 
     def _setup_isv_config_dirs(self):
-        logdir = os.path.join(self._conf_dir, self.isv, 'logs')
-        metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
-        if not os.path.exists(logdir):
-            logging.info('Creating log dir "{0}"'.format(logdir))
-            os.makedirs(logdir)
-        if not os.path.exists(metadir):
-            logging.info('Creating metadata dir "{0}"'.format(metadir))
-            os.makedirs(metadir)
+        self._logdir = os.path.join(self._conf_dir, self.isv, 'logs')
+        self._metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
+        if not os.path.exists(self._logdir):
+            logging.info('Creating log dir "{0}"'.format(self._logdir))
+            os.makedirs(self._logdir)
+        if not os.path.exists(self._metadir):
+            logging.info('Creating metadata dir "{0}"'.format(self._metadir))
+            os.makedirs(self._metadir)
 
     def _setup_isv_config_file(self):
         """Setup config file defaults if not provided"""
@@ -895,7 +900,7 @@ def main():
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
                       'help': 'ISV Application name. Example: "some/app"'}
     parser = ArgumentParser()
-    parser.add_argument('-l', '--log', metavar='LOG_LEVEL',
+    parser.add_argument('-l', '--log', metavar='LOG_LEVEL', default='WARNING',
             help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
     parser.add_argument('-n', '--nocommit', action='store_true',
                         help='Do not commit configuration. Development only.')
@@ -922,10 +927,17 @@ def main():
     pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar', help='File to upload to pulp server. Output of of "docker save some/image > image.tar".')
     args = parser.parse_args()
 
-    if args.log:
-        log_level = getattr(logging, args.log.upper(), None)
-        if isinstance(log_level, int):
-            logging.basicConfig(level=log_level)
+    logFormatter = logging.Formatter('%(asctime)s - {0} - %(name)s - %(levelname)s - %(message)s'.format(args.action.upper()))
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    consoleHandler = logging.StreamHandler()
+    consoleHandler.setFormatter(logFormatter)
+    log_level = getattr(logging, args.log.upper(), None)
+    if not isinstance(log_level, int):
+        print 'Invalid value passed to the --log option. See help for possible values.'
+        sys.exit(1)
+    consoleHandler.setLevel(log_level)
+    logger.addHandler(consoleHandler)
 
     try:
         config_kwargs = {}
@@ -949,6 +961,11 @@ def main():
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
         sys.exit(1)
+
+    fileHandler = logging.FileHandler(config.logfile)
+    fileHandler.setFormatter(logFormatter)
+    fileHandler.setLevel(logging.DEBUG)
+    logger.addHandler(fileHandler)
 
     try:
         openshift = Openshift(**config.openshift_conf)

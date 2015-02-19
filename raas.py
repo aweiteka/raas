@@ -727,7 +727,7 @@ class Configuration(object):
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
         self._pulp_repo = None
-        self._config_branch = config_branch
+        self.config_branch = config_branch
         self.isv = isv
         self.isv_app_name = isv_app_name
         self.file_upload = file_upload
@@ -768,6 +768,13 @@ class Configuration(object):
     def config_branch(self):
         return self._config_branch
 
+    @config_branch.setter
+    def config_branch(self, val):
+        if not val:
+            logging.error('Git config branch is not defined')
+            raise ValueError('Git config branch is not defined')
+        self._config_branch = val.lower()
+
     @property
     def isv(self):
         return self._isv
@@ -775,9 +782,13 @@ class Configuration(object):
     @isv.setter
     def isv(self, val):
         if not val.isalnum():
-            raise ValueError('ISV "{0}" must contain only alphanumeric characters'.format(val))
+            logging.error('ISV "{0}" must contain only alphanumeric characters'.format(val))
+            raise ValueError('Invalid ISV name "{0}"'.format(val))
+        if len(val) > 16:
+            logging.error('ISV "{0}" must not be longer than 16 characters'.format(val))
+            raise ValueError('Invalid ISV name "{0}"'.format(val))
         self._isv = val.lower()
-        logging.debug('ISV set to "{0}"'.format(self.isv))
+        logging.debug('ISV set to "{0}"'.format(self._isv))
 
     @property
     def isv_app_name(self):
@@ -786,58 +797,79 @@ class Configuration(object):
     @isv_app_name.setter
     def isv_app_name(self, val):
         if val:
+            if val.count('/') != 1:
+                logging.error('ISV app name must contain exactly one "/": {0}'.format(val))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            val = val.lower()
+            repo, app = val.split('/')
+            if not 4 <= len(repo) <= 30:
+                logging.error('Namespace part of ISV app name must have between 4 and 30 characters: {0}'.format(repo))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            if not re.match('^[a-z0-9_]+$', repo):
+                logging.error('Namespace part of ISV app name must contain only [a-z0-9_] characters: {0}'.format(repo))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            if not re.match('^[a-z0-9-_.]+$', app):
+                logging.error('App name part of ISV app name must contain only [a-z0-9-_.] characters: {0}'.format(app))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
             self._isv_app_name = val.replace('/', '-')
         else:
             self._isv_app_name = None
-        logging.debug('ISV app name set to "{0}"'.format(self.isv_app_name))
+        logging.debug('ISV app name set to "{0}"'.format(self._isv_app_name))
 
     @property
     def oodomain(self):
-        if self._oodomain:
-            return self._oodomain
-        else:
-            return self.isv
+        return self._oodomain
 
     @oodomain.setter
     def oodomain(self, val):
         if val:
             if not val.isalnum():
-                raise ValueError('Openshift domain "{0}" must contain only alphanumeric characters'.format(val))
+                logging.error('Openshift domain "{0}" must contain only alphanumeric characters'.format(val))
+                raise ValueError('Invalid openshift domain "{0}"'.format(val))
+            if len(val) > 16:
+                logging.error('Openshift domain "{0}" must not be longer than 16 characters'.format(val))
+                raise ValueError('Invalid openshift domain "{0}"'.format(val))
             self._oodomain = val.lower()
-            logging.debug('Openshift domain set to "{0}"'.format(self.isv))
         else:
-            self._oodomain = None
+            self._oodomain = self.isv
+        logging.debug('Openshift domain set to "{0}"'.format(self._oodomain))
 
     @property
     def ooapp(self):
-        if self._ooapp:
-            return self._ooapp
-        else:
-            return 'registry'
+        return self._ooapp
 
     @ooapp.setter
     def ooapp(self, val):
         if val:
             if not val.isalnum():
-                raise ValueError('Openshift app name "{0}" must contain only alphanumeric characters'.format(val))
+                logging.error('Openshift app name "{0}" must contain only alphanumeric characters'.format(val))
+                raise ValueError('Invalid openshift app name "{0}"'.format(val))
+            if len(val) > 32:
+                logging.error('Openshift app name "{0}" must not be longer than 32 characters'.format(val))
+                raise ValueError('Invalid openshift app name "{0}"'.format(val))
             self._ooapp = val.lower()
-            logging.debug('Openshift app name set to "{0}"'.format(self.isv))
-        self._ooapp = None
+        else:
+            self._ooapp = 'registry'
+        logging.debug('Openshift app name set to "{0}"'.format(self._ooapp))
 
     @property
     def s3bucket(self):
-        if self._s3bucket:
-            return self._s3bucket
-        else:
-            return self.isv + '.bucket'
+        return self._s3bucket
 
     @s3bucket.setter
     def s3bucket(self, val):
         if val:
-            self._s3bucket = val.lower()
-            logging.debug('S3 bucket name set to "{0}"'.format(self.isv))
+            val = val.lower()
+            if not re.match('^[a-z0-9-_.]+$', val):
+                logging.error('S3 bucket name "{0}" must contain only [a-z0-9-_.] characters'.format(val))
+                raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
+            if len(val) > 32:
+                logging.error('S3 bucket name "{0}" must not be longer than 32 characters'.format(val))
+                raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
+            self._s3bucket = val
         else:
-            self._s3bucket = None
+            self._s3bucket = self.isv + '.bucket'
+        logging.debug('S3 bucket name set to "{0}"'.format(self._s3bucket))
 
     @property
     def _pulp_redirect_url(self):

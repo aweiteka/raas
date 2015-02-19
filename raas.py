@@ -709,6 +709,10 @@ class Openshift(object):
             self._app_local_dir = None
 
 
+class ConfigurationError(Exception):
+    pass
+
+
 class Configuration(object):
     """Configuration and utilities"""
 
@@ -885,6 +889,7 @@ class Configuration(object):
         if self._config_repo:
             logging.info('Committing changes in configuration')
             # TODO: add crane config file from meta dir
+            # TODO: take configenv into account when using cwd?
             files = [self._conf_file, self.logfile]
             self._config_repo.index.add(files)
             self._config_repo.index.commit('Updated configuration by raas script')
@@ -916,36 +921,46 @@ def main():
     """Entrypoint for script"""
     isv_args = ['isv']
     isv_kwargs = {'metavar': 'ISV_NAME',
-                  'help': 'ISV name matching config file section'}
+            'help': 'ISV name matching config file section'}
     isv_app_args = ['isv_app']
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
-                      'help': 'ISV Application name. Example: "some/app"'}
-    parser = ArgumentParser()
-    parser.add_argument('-l', '--log', metavar='LOG_LEVEL', default='WARNING',
-            help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
+            'help': 'ISV Application name, for example: "some/app"'}
+    parser = ArgumentParser(
+            description='This script is used to automate publishing of certified docker images from ISVs (Independent Software Vendors)')
     parser.add_argument('-n', '--nocommit', action='store_true',
-                        help='Do not commit configuration. Development only.')
+            help='do not commit configuration (development only)')
+    parser.add_argument('-l', '--log', metavar='LOG_LEVEL', default='WARNING',
+            choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+            help='desired log level one of "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL". Default is "WARNING"')
     parser.add_argument('-c', '--configenv', metavar='BRANCH', default='stage',
-                        choices=['dev', 'stage', 'master'],
-                        help='Working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
-    subparsers = parser.add_subparsers(help='sub-command help', dest='action')
-    status_parser = subparsers.add_parser('status', help='Check configuration status')
+            choices=['dev', 'stage', 'master'],
+            help='working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
+    subparsers = parser.add_subparsers(dest='action')
+    status_parser = subparsers.add_parser('status',
+            help='check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
     status_parser.add_argument('-a', '--isv_app', **isv_app_kwargs)
     status_parser.add_argument('-p', '--pulp', action='store_true',
-                        help='Include checking the pulp server status')
-    setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
+            help='include checking the pulp server status')
+    setup_parser = subparsers.add_parser('setup',
+            help='setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
-    setup_parser.add_argument('--oodomain', help='Openshift domain for this ISV, default is ISV name')
-    setup_parser.add_argument('--ooapp', help='Openshift crane app name for this ISV, default is "registry"')
-    setup_parser.add_argument('--s3bucket', help='AWS S3 bucket name for this ISV, default is [ISV_NAME].bucket')
-    publish_parser = subparsers.add_parser('publish', help='Publish new or updated image')
+    setup_parser.add_argument('--oodomain',
+            help='openshift domain for this ISV, default is ISV name')
+    setup_parser.add_argument('--ooapp',
+            help='openshift crane app name for this ISV, default is "registry"')
+    setup_parser.add_argument('--s3bucket',
+            help='AWS S3 bucket name for this ISV, default is [ISV_NAME].bucket')
+    publish_parser = subparsers.add_parser('publish',
+            help='publish new or updated image')
     publish_parser.add_argument(*isv_args, **isv_kwargs)
     publish_parser.add_argument(*isv_app_args, **isv_app_kwargs)
-    pulp_upload_parser = subparsers.add_parser('pulp-upload', help='Upload image to pulp')
+    pulp_upload_parser = subparsers.add_parser('pulp-upload',
+            help='upload image to pulp')
     pulp_upload_parser.add_argument(*isv_args, **isv_kwargs)
     pulp_upload_parser.add_argument(*isv_app_args, **isv_app_kwargs)
-    pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar', help='File to upload to pulp server. Output of of "docker save some/image > image.tar".')
+    pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar',
+            help='file to upload to pulp server. Output of "docker save some/image > image.tar"')
     args = parser.parse_args()
 
     logFormatter = logging.Formatter('%(asctime)s - {0} - %(name)s - %(levelname)s - %(message)s'.format(args.action.upper()))

@@ -565,7 +565,7 @@ class Openshift(object):
                 msgs += '\n - ' + m['text']
             logging.info('Messages from Openshift response:{0}'.format(msgs))
 
-        if r.status_code >= 400:
+        if r.status_code >= 500:
             raise Exception('Received invalid status code: {0}'.format(r.status_code))
 
         return r_json
@@ -677,11 +677,10 @@ class Openshift(object):
         self.clone_app()
         logging.info('Updating Openshift crane app configuration')
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
-        dest_dir_rel = os.path.join('crane', 'data')
         files_to_add = []
         for i in data_files:
             shutil.copy(i, dest_dir)
-            files_to_add.append(os.path.join(dest_dir_rel, os.path.basename(i)))
+            files_to_add.append(os.path.join(dest_dir, os.path.basename(i)))
         self._app_repo.index.add(files_to_add)
         self._app_repo.index.commit('Updated crane configuration')
         self._app_repo.remotes.origin.push()
@@ -721,6 +720,12 @@ class Configuration(object):
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
             logging.info('Using configuration in current dir "{0}"'.format(self._conf_dir))
+            try:
+                self._config_repo = Repo(self._conf_dir)
+                logging.info('Found git repository in "{0}"'.format(self._conf_dir))
+            except Exception:
+                logging.info('No repository found in "{0}"'.format(self._conf_dir))
+                self._config_repo = None
         else:
             repo_url = os.getenv(self._CONFIG_REPO_ENV_VAR)
             if not repo_url:
@@ -863,11 +868,13 @@ class Configuration(object):
         return os.path.join(self._logdir, date.today().isoformat() + '.log')
 
     def commit_all_changes(self):
-        # NOTE: we will use the branch specified in self.config_branch
-        #self._config_repo._index.add(FIXME)
-        #self._config_repo._index.commit(FIXME)
-        #self._config_repo.remotes.origin.push()
-        raise NotImplemented()
+        if self._config_repo:
+            logging.info('Committing changes in configuration')
+            # TODO: add crane config file from meta dir
+            files = [self._conf_file, self.logfile]
+            self._config_repo.index.add(files)
+            self._config_repo.index.commit('Updated configuration by raas script')
+            self._config_repo.remotes.origin.push()
 
     def _setup_isv_config_dirs(self):
         self._logdir = os.path.join(self._conf_dir, self.isv, 'logs')

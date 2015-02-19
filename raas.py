@@ -125,15 +125,30 @@ class PulpServer(object):
 
             if 'spawned_tasks' in r_json:
                 for task in r_json['spawned_tasks']:
-                    logging.debug('Checking status of spawned task {0}'.format(task['task_id']))
-                    task_json = self._call_pulp('{0}{1}'.format(self.server_url, task['_href']))
-                    if task_json['state'] == 'error':
-                        if 'traceback' in task_json:
-                            logging.debug('Pulp task traceback:\n{0}'.format(task_json['traceback']))
-                        raise Exception('Pulp task failed: {0}'.format(task_json['error']['description']))
+                    self._watch_task(task['task_id'], task['_href'])
             return r_json
         else:
             return r
+
+    def _watch_task(self, tid, thref, timeout=60, poll=5):
+        """Watch a task ID and return when it finishes or fails"""
+        logging.info('Waiting up to "{0}" seconds for task "{1}"...'.format(timeout, tid))
+        curr = 0
+        while curr < timeout:
+            t = self._call_pulp('{0}{1}'.format(self.server_url, thref))
+            if t['state'] == 'finished':
+                logging.info('Subtask "{0}" completed'.format(tid))
+                return True
+            elif t['state'] == 'error':
+                logging.error('Subtask "{0}" had an error: {1}'.format(tid, t['error']))
+                logging.debug('Traceback from subtask "{0}":\n{1}'.format(tid, t['traceback']))
+                raise Exception('Pulp task "{0}" failed with error: {1}'.format(tid, t['error']))
+            else:
+                logging.debug('Waiting for task "{0}" ({1}/{2} seconds passed)'.format(tid, curr, timeout))
+                sleep(poll)
+                curr += poll
+        logging.error('Timed out waiting for pulp task "{0}"'.format(tid))
+        raise Exception('Timed out waiting for pulp task "{0}"'.format(tid))
 
     def status(self):
         """Check pulp server status"""

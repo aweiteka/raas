@@ -714,7 +714,6 @@ class Configuration(object):
 
     _CONFIG_FILE_NAME = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
-    _S3_URL = "https://s3.amazonaws.com"
 
     def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
                  oodomain=None, ooapp=None, s3bucket=None):
@@ -840,7 +839,7 @@ class Configuration(object):
     def _pulp_redirect_url(self):
         """Returns Pulp server redirect URL for S3 bucket"""
         if self._isv_app_name:
-            return '/'.join([self._S3_URL,
+            return '/'.join([self._parsed_config.get('aws', 'aws_url'),
                              self._parsed_config.get(self.isv, 's3_bucket'),
                              self._isv_app_name])
         else:

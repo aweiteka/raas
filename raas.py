@@ -15,6 +15,7 @@ from boto import s3
 from ConfigParser import ConfigParser
 from datetime import date
 from git import Repo
+from git.exc import InvalidGitRepositoryError
 from glob import glob
 from tempfile import mkdtemp
 from time import sleep
@@ -740,26 +741,32 @@ class Configuration(object):
             logging.info('Using configuration in current dir "{0}"'.format(self._conf_dir))
             try:
                 self._config_repo = Repo(self._conf_dir)
-                logging.info('Found git repository in "{0}"'.format(self._conf_dir))
-            except Exception:
-                logging.info('No repository found in "{0}"'.format(self._conf_dir))
+                logging.info('Found git repository in current dir "{0}"'.format(self._conf_dir))
+            except InvalidGitRepositoryError:
                 self._config_repo = None
+                logging.info('No repository found in current dir "{0}"'.format(self._conf_dir))
         else:
             repo_url = os.getenv(self._CONFIG_REPO_ENV_VAR)
             if not repo_url:
-                raise Exception('Current working directory does not contain "{0}" configuration file ' + \
-                        'and environment variable "{1}" is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
+                logging.error('Current working directory does not contain "{0}" ' + \
+                        'configuration file and environment variable "{1}" is ' + \
+                        'not set. One of these two options is required.'\
+                        .format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
+                raise ConfigurationError('Configuration file in current dir or ' + \
+                        '"{0}" env var is required'.format(self._CONFIG_REPO_ENV_VAR))
             self._conf_dir = mkdtemp()
-            logging.info('Clonning config repo from "{0}:{1}" to "{2}"'.format(repo_url, self._config_branch, self._conf_dir))
-            self._config_repo = Repo.clone_from(repo_url, self._conf_dir, branch=self._config_branch)
+            logging.info('Clonning config repo from "{0}:{1}" to "{2}"'.format(
+                    repo_url, self._config_branch, self._conf_dir))
+            self._config_repo = Repo.clone_from(repo_url, self._conf_dir,
+                    branch=self._config_branch)
 
         self._conf_file = os.path.join(self._conf_dir, self._CONFIG_FILE_NAME)
         if not os.path.isfile(self._conf_file):
-            raise Exception('Configuration file "{0}" not found'.format(self._conf_file))
+            logging.error('Config file "{0}" not found'.format(self._conf_file))
+            raise ConfigurationError('Missing config file')
         self._parsed_config = ConfigParser()
         self._parsed_config.read(self._conf_file)
-
-        logging.info('Using conf file "{0}"'.format(self._conf_file))
+        logging.info('Loaded config file "{0}"'.format(self._conf_file))
 
         self._setup_isv_config_dirs()
         self._setup_isv_config_file()
@@ -774,6 +781,7 @@ class Configuration(object):
             logging.error('Git config branch is not defined')
             raise ValueError('Git config branch is not defined')
         self._config_branch = val.lower()
+        logging.debug('Git config branch set to "{0}"'.format(self._config_branch))
 
     @property
     def isv(self):
@@ -873,13 +881,21 @@ class Configuration(object):
 
     @property
     def _pulp_redirect_url(self):
-        """Returns Pulp server redirect URL for S3 bucket"""
-        if self._isv_app_name:
-            return '/'.join([self._parsed_config.get('aws', 'aws_url'),
-                             self._parsed_config.get(self.isv, 's3_bucket'),
-                             self._isv_app_name])
-        else:
-            return None
+        """Returns pulp redirect URL for S3 bucket"""
+        if not self._isv_app_name:
+            logging.error('ISV app name is required for pulp redirect URL')
+            raise ConfigurationError('Missing ISV app name')
+        r_url = '/'.join([self._parsed_config.get('aws', 'aws_url'),
+                self._parsed_config.get(self.isv, 's3_bucket'),
+                self._isv_app_name])
+        logging.info('Pulp redirect URL: {0}'.format(r_url))
+        return r_url
+
+    @property
+    def logfile(self):
+        l_file = os.path.join(self._logdir, date.today().isoformat() + '.log')
+        logging.debug('Using "{0}" as log file'.format(l_file))
+        return l_file
 
     @property
     def pulp_conf(self):
@@ -913,15 +929,10 @@ class Configuration(object):
         return {'git_repo_url': self._parsed_config.get('redhat', 'metadata_repo'),
                 'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
-    @property
-    def logfile(self):
-        return os.path.join(self._logdir, date.today().isoformat() + '.log')
-
     def commit_all_changes(self):
         if self._config_repo:
-            logging.info('Committing changes in configuration')
+            logging.info('Committing changes in config repo')
             # TODO: add crane config file from meta dir
-            # TODO: take configenv into account when using cwd?
             files = [self._conf_file, self.logfile]
             self._config_repo.index.add(files)
             self._config_repo.index.commit('Updated configuration by raas script')
@@ -936,6 +947,8 @@ class Configuration(object):
         if not os.path.exists(self._metadir):
             logging.info('Creating metadata dir "{0}"'.format(self._metadir))
             os.makedirs(self._metadir)
+        logging.debug('Using "{0}" as log dir'.format(self._logdir))
+        logging.debug('Using "{0}" as meta dir'.format(self._metadir))
 
     def _setup_isv_config_file(self):
         """Setup config file defaults if not provided"""
@@ -947,6 +960,9 @@ class Configuration(object):
             self._parsed_config.set(self.isv, 's3_bucket', self.s3bucket)
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)
+            logging.debug('ISV openshift domain set to "{0}"'.format(self.oodomain))
+            logging.debug('ISV openshift app name set to "{0}"'.format(self.ooapp))
+            logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
 
 
 def main():
@@ -956,7 +972,7 @@ def main():
             'help': 'ISV name matching config file section'}
     isv_app_args = ['isv_app']
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
-            'help': 'ISV Application name, for example: "some/app"'}
+            'help': 'ISV application name, for example: "some/app"'}
     parser = ArgumentParser(
             description='This script is used to automate publishing of certified docker images from ISVs (Independent Software Vendors)')
     parser.add_argument('-n', '--nocommit', action='store_true',
@@ -978,11 +994,11 @@ def main():
             help='setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
     setup_parser.add_argument('--oodomain',
-            help='openshift domain for this ISV, default is ISV name')
+            help='openshift domain for this ISV if ISV is not set in config file, default is ISV name')
     setup_parser.add_argument('--ooapp',
-            help='openshift crane app name for this ISV, default is "registry"')
+            help='openshift crane app name for this ISV if ISV is not set in config file, default is "registry"')
     setup_parser.add_argument('--s3bucket',
-            help='AWS S3 bucket name for this ISV, default is [ISV_NAME].bucket')
+            help='AWS S3 bucket name for this ISV if ISV is not set in config file, default is [ISV_NAME].bucket')
     publish_parser = subparsers.add_parser('publish',
             help='publish new or updated image')
     publish_parser.add_argument(*isv_args, **isv_kwargs)

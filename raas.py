@@ -409,6 +409,10 @@ class RedHatMeta(object):
             self._repo = None
 
 
+class AwsError(Exception):
+    pass
+
+
 class AwsS3(object):
     """Interact with AWS S3"""
 
@@ -426,57 +430,68 @@ class AwsS3(object):
     @property
     def bucket(self):
         if not self._bucket:
-            self._bucket = self._conn.get_bucket(self._bucket_name)
+            logging.info('Getting S3 bucket "{0}"'.format(self.bucket_name))
+            self._bucket = self._conn.get_bucket(self.bucket_name)
         return self._bucket
 
     @property
     def image_ids(self):
         if not self._image_ids:
+            if not self._app_name:
+                logging.error('ISV app name is required for S3 image IDs')
+                raise ConfigurationError('Missing ISV app name')
+            logging.info('Getting S3 image IDs for "{0}"'.format(self._app_name))
             for i in self.bucket.list(prefix=self._app_name + '/', delimiter='/'):
                 self._image_ids.add(i.name.split('/')[1])
-            logging.info('AWS image ids: {0}'.format(self._image_ids))
+            logging.debug('S3 image IDs: {0}'.format(self._image_ids))
         return self._image_ids
 
     def _connect(self, aws_key, aws_secret):
         logging.info('Connecting to AWS')
         self._conn = connect_s3(aws_access_key_id=aws_key,
-                                aws_secret_access_key=aws_secret)
+                aws_secret_access_key=aws_secret)
 
     def verify_bucket(self):
-        logging.info('Looking up bucket "{0}"'.format(self._bucket_name))
-        if not self._conn.lookup(self._bucket_name):
-            raise Exception('Bucket "{0}" not found'.format(self._bucket_name))
+        logging.info('Looking up S3 bucket "{0}"'.format(self.bucket_name))
+        if not self._conn.lookup(self.bucket_name):
+            logging.error('S3 bucket "{0}" does not exist'.format(self.bucket_name))
+            raise AwsError('Failed to find S3 bucket "{0}"'.format(self.bucket_name))
+        logging.info('S3 bucket "{0}" looks OK'.format(self.bucket_name))
+        print 'S3 bucket "{0}" looks OK'.format(self.bucket_name)
 
     def status(self):
-        result = True
-        logging.info('Checking AWS status..')
-        try:
-            self.verify_bucket()
-            print 'AWS bucket "{0}" looks OK'.format(self.bucket_name)
-        except Exception as e:
-            logging.error('Failed to verify AWS bucket: {0}'.format(e))
-            result = False
-        return result
+        logging.info('Checking AWS status')
+        self.verify_bucket()
+        logging.info('AWS looks OK')
+        print 'AWS status is OK'
 
     def create_bucket(self):
         try:
             self.verify_bucket()
-            logging.info('Bucket "{0}" already exists'.format(self.bucket_name))
-        except Exception:
-            logging.info('Creating bucket "{0}"'.format(self.bucket_name))
+            logging.info('S3 bucket "{0}" already exists'.format(self.bucket_name))
+            print 'S3 bucket "{0}" already exists'.format(self.bucket_name)
+        except AwsError:
+            logging.info('Creating S3 bucket "{0}"'.format(self.bucket_name))
             self._bucket = self._conn.create_bucket(self.bucket_name)
+            logging.info('Created S3 bucket "{0}"'.format(self.bucket_name))
+            print 'Created S3 bucket "{0}"'.format(self.bucket_name)
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
-        logging.info('Uploading files to bucket "{0}"'.format(self._bucket_name))
+        logging.info('Uploading files to S3 bucket "{0}"'.format(self.bucket_name))
+        if not self._app_name:
+            logging.error('ISV app name is required for S3 image upload')
+            raise ConfigurationError('Missing ISV app name')
         for name, path in files:
             with open(path, 'rb') as f:
                 dest = '/'.join([self._app_name, name])
                 key = s3.key.Key(bucket=self.bucket, name=dest)
+                logging.debug('Uploading "{0}"'.format(dest))
+                print 'Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name)
                 key.set_contents_from_file(f, replace=True)
                 key.set_acl('public-read')
-                logging.debug('Uploaded file "{0}"'.format(dest))
-        logging.info('All files uploaded to AWS')
+                logging.debug('Uploaded "{0}"'.format(dest))
+        logging.info('All files uploaded to S3 bucket "{0}"'.format(self.bucket_name))
 
 
 class Openshift(object):

@@ -13,7 +13,9 @@ from argparse import ArgumentParser
 from boto import connect_s3
 from boto import s3
 from ConfigParser import ConfigParser
+from datetime import date
 from git import Repo
+from git.exc import InvalidGitRepositoryError
 from glob import glob
 from tempfile import mkdtemp
 from time import sleep
@@ -124,15 +126,30 @@ class PulpServer(object):
 
             if 'spawned_tasks' in r_json:
                 for task in r_json['spawned_tasks']:
-                    logging.debug('Checking status of spawned task {0}'.format(task['task_id']))
-                    task_json = self._call_pulp('{0}{1}'.format(self.server_url, task['_href']))
-                    if task_json['state'] == 'error':
-                        if 'traceback' in task_json:
-                            logging.debug('Pulp task traceback:\n{0}'.format(task_json['traceback']))
-                        raise Exception('Pulp task failed: {0}'.format(task_json['error']['description']))
+                    self._watch_task(task['task_id'], task['_href'])
             return r_json
         else:
             return r
+
+    def _watch_task(self, tid, thref, timeout=60, poll=5):
+        """Watch a task ID and return when it finishes or fails"""
+        logging.info('Waiting up to "{0}" seconds for task "{1}"...'.format(timeout, tid))
+        curr = 0
+        while curr < timeout:
+            t = self._call_pulp('{0}{1}'.format(self.server_url, thref))
+            if t['state'] == 'finished':
+                logging.info('Subtask "{0}" completed'.format(tid))
+                return True
+            elif t['state'] == 'error':
+                logging.error('Subtask "{0}" had an error: {1}'.format(tid, t['error']))
+                logging.debug('Traceback from subtask "{0}":\n{1}'.format(tid, t['traceback']))
+                raise Exception('Pulp task "{0}" failed with error: {1}'.format(tid, t['error']))
+            else:
+                logging.debug('Waiting for task "{0}" ({1}/{2} seconds passed)'.format(tid, curr, timeout))
+                sleep(poll)
+                curr += poll
+        logging.error('Timed out waiting for pulp task "{0}"'.format(tid))
+        raise Exception('Timed out waiting for pulp task "{0}"'.format(tid))
 
     def status(self):
         """Check pulp server status"""
@@ -392,6 +409,10 @@ class RedHatMeta(object):
             self._repo = None
 
 
+class AwsError(Exception):
+    pass
+
+
 class AwsS3(object):
     """Interact with AWS S3"""
 
@@ -409,57 +430,73 @@ class AwsS3(object):
     @property
     def bucket(self):
         if not self._bucket:
-            self._bucket = self._conn.get_bucket(self._bucket_name)
+            self.verify_bucket()
+            logging.info('Getting S3 bucket "{0}"'.format(self.bucket_name))
+            self._bucket = self._conn.get_bucket(self.bucket_name)
         return self._bucket
 
     @property
     def image_ids(self):
         if not self._image_ids:
+            if not self._app_name:
+                logging.error('ISV app name is required for S3 image IDs')
+                raise ConfigurationError('Missing ISV app name')
+            logging.info('Getting S3 image IDs for "{0}"'.format(self._app_name))
             for i in self.bucket.list(prefix=self._app_name + '/', delimiter='/'):
                 self._image_ids.add(i.name.split('/')[1])
-            logging.info('AWS image ids: {0}'.format(self._image_ids))
+            logging.debug('S3 image IDs: {0}'.format(self._image_ids))
         return self._image_ids
 
     def _connect(self, aws_key, aws_secret):
         logging.info('Connecting to AWS')
         self._conn = connect_s3(aws_access_key_id=aws_key,
-                                aws_secret_access_key=aws_secret)
+                aws_secret_access_key=aws_secret)
 
     def verify_bucket(self):
-        logging.info('Looking up bucket "{0}"'.format(self._bucket_name))
-        if not self._conn.lookup(self._bucket_name):
-            raise Exception('Bucket "{0}" not found'.format(self._bucket_name))
+        logging.info('Looking up S3 bucket "{0}"'.format(self.bucket_name))
+        if not self._conn.lookup(self.bucket_name):
+            logging.warn('S3 bucket "{0}" does not exist'.format(self.bucket_name))
+            raise AwsError('Failed to find S3 bucket "{0}"'.format(self.bucket_name))
+        logging.info('S3 bucket "{0}" looks OK'.format(self.bucket_name))
+        print 'S3 bucket "{0}" looks OK'.format(self.bucket_name)
 
     def status(self):
-        result = True
-        logging.info('Checking AWS status..')
-        try:
-            self.verify_bucket()
-            print 'AWS bucket "{0}" looks OK'.format(self.bucket_name)
-        except Exception as e:
-            logging.error('Failed to verify AWS bucket: {0}'.format(e))
-            result = False
-        return result
+        logging.info('Checking AWS status')
+        self.verify_bucket()
+        logging.info('AWS looks OK')
+        print 'AWS status is OK'
 
     def create_bucket(self):
         try:
             self.verify_bucket()
-            logging.info('Bucket "{0}" already exists'.format(self.bucket_name))
-        except Exception:
-            logging.info('Creating bucket "{0}"'.format(self.bucket_name))
+            logging.info('S3 bucket "{0}" already exists'.format(self.bucket_name))
+            print 'S3 bucket "{0}" already exists'.format(self.bucket_name)
+        except AwsError:
+            logging.info('Creating S3 bucket "{0}"'.format(self.bucket_name))
             self._bucket = self._conn.create_bucket(self.bucket_name)
+            logging.info('Created S3 bucket "{0}"'.format(self.bucket_name))
+            print 'Created S3 bucket "{0}"'.format(self.bucket_name)
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
-        logging.info('Uploading files to bucket "{0}"'.format(self._bucket_name))
+        logging.info('Uploading files to S3 bucket "{0}"'.format(self.bucket_name))
+        if not self._app_name:
+            logging.error('ISV app name is required for S3 image upload')
+            raise ConfigurationError('Missing ISV app name')
         for name, path in files:
             with open(path, 'rb') as f:
                 dest = '/'.join([self._app_name, name])
                 key = s3.key.Key(bucket=self.bucket, name=dest)
+                logging.debug('Uploading "{0}"'.format(dest))
+                print 'Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name)
                 key.set_contents_from_file(f, replace=True)
                 key.set_acl('public-read')
-                logging.debug('Uploaded file "{0}"'.format(dest))
-        logging.info('All files uploaded to AWS')
+                logging.debug('Uploaded "{0}"'.format(dest))
+        logging.info('All files uploaded to S3 bucket "{0}"'.format(self.bucket_name))
+
+
+class OpenshiftError(Exception):
+    pass
 
 
 class Openshift(object):
@@ -470,6 +507,7 @@ class Openshift(object):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
+        self._isv_app_crane_file = None
         self._image_ids = set()
         self._server_url = server_url
         self._token = token
@@ -495,45 +533,55 @@ class Openshift(object):
     def app_local_dir(self):
         if not self._app_local_dir:
             self._app_local_dir = mkdtemp()
-            logging.info('Created local Openshift app dir "{0}"'.format(self._app_local_dir))
+            logging.info('Created local openshift app dir "{0}"'.format(self._app_local_dir))
         return self._app_local_dir
 
     @property
     def app_data(self):
         if not self._app_data:
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
-            logging.info('Getting Openshift app data for "{0}"'.format(self.app_name))
+            logging.info('Getting openshift app data for "{0}"'.format(self.app_name))
             r_json = self._call_openshift(url)
             if r_json['status'] != 'ok':
-                raise Exception('Failed to get applications in domain "{0}"'.format(self.domain))
+                logging.error('Failed to get applications in domain "{0}"'.format(self.domain))
+                raise OpenshiftError('Failed to get applications in domain "{0}"'.format(self.domain))
             for app in r_json['data']:
-                logging.debug('Inspecting Openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
+                logging.debug('Inspecting openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                 if app['name'] == self.app_name:
-                    logging.info('Found Openshift app "{0}" with ID "{1}"'.format(self.app_name, app['id']))
+                    logging.info('Found openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                     self._app_data = app
                     break
             else:
-                raise Exception('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
+                logging.error('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
+                raise OpenshiftError('Openshift application "{0}" not found'.format(self.app_name))
         return self._app_data
 
     @property
     def image_ids(self):
         if not self._image_ids:
-            with open(self._isv_app_crane_file) as f:
+            with open(self.isv_app_crane_file) as f:
                 data = json.load(f)
             logging.debug('Crane "{0}.json" data:\n{1}'.format(self.isv_app_name, json.dumps(data, indent=2)))
             self._image_ids = [i['id'] for i in data['images']]
             self._image_ids = set(self._image_ids)
-            logging.info('Crane image IDs: {0}'.format(self._image_ids))
+            logging.debug('Crane image IDs: {0}'.format(self._image_ids))
         return self._image_ids
 
     @property
-    def _isv_app_crane_file(self):
-        self.clone_app()
-        filename = os.path.join(self.app_local_dir, 'crane', 'data', self.isv_app_name + '.json')
-        if not os.path.isfile(filename):
-            raise Exception('ISV app crane file "{0}" does not exist'.format(filename))
-        return filename
+    def isv_app_crane_file(self):
+        if not self._isv_app_crane_file:
+            if not self.isv_app_name:
+                logging.error('ISV app name is required to get proper crane config file')
+                raise ConfigurationError('Missing ISV app name')
+            self.clone_app()
+            filename = os.path.join(self.app_local_dir, 'crane', 'data', self.isv_app_name + '.json')
+            if not os.path.isfile(filename):
+                logging.warn('ISV app crane file "{0}" does not exist'.format(filename))
+                raise OpenshiftError('Missing ISV app crane file')
+            logging.info('Using ISV app crane file "{0}"'.format(filename))
+            print 'Using ISV app crane file "{0}"'.format(filename)
+            self._isv_app_crane_file = filename
+        return self._isv_app_crane_file
 
     @property
     def _env_vars(self):
@@ -546,16 +594,22 @@ class Openshift(object):
         if not url.startswith(self._server_url):
             url = '{0}/{1}'.format(self._server_url, url)
         if req_type == 'get':
-            logging.info('Calling Openshift URL "{0}"'.format(url))
+            logging.info('Calling openshift URL "{0}"'.format(url))
             r = requests.get(url, headers=headers)
         elif req_type == 'post':
-            logging.info('Posting to Openshift URL "{0}"'.format(url))
+            logging.info('Posting to openshift URL "{0}"'.format(url))
+            logging.debug('Posting data: {0}'.format(payload))
             r = requests.post(url, headers=headers, data=payload)
         else:
-            raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
-        r_json = r.json()
+            logging.error('Invalid value of "req_type" parameter: {0}'.format(req_type))
+            raise ValueError('Invalid value of "req_type" parameter')
 
         logging.debug('Openshift HTTP status code: {0}'.format(r.status_code))
+        if r.status_code >= 500:
+            logging.error('Received invalid status code from openshift: {0}'.format(r.status_code))
+            raise OpenshiftError('Received invalid status code: {0}'.format(r.status_code))
+
+        r_json = r.json()
         logging.debug('Openshift JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
         if r_json['messages']:
@@ -564,86 +618,90 @@ class Openshift(object):
                 msgs += '\n - ' + m['text']
             logging.info('Messages from Openshift response:{0}'.format(msgs))
 
-        if r.status_code >= 400:
-            raise Exception('Received invalid status code: {0}'.format(r.status_code))
-
         return r_json
 
     def _set_env_vars(self):
         for key, val in self._env_vars:
-            logging.info('Setting environment variable "{0}"'.format(key))
+            logging.info('Setting openshift environment variable "{0}"'.format(key))
             payload = {'name': key, 'value': val}
             r_json = self._call_openshift(
-                     self._app_data['links']['ADD_ENVIRONMENT_VARIABLE']['href'],
-                     'post', payload)
+                    self.app_data['links']['ADD_ENVIRONMENT_VARIABLE']['href'],
+                    'post', payload)
             if r_json['status'] != 'created':
-                raise Exception('Failed to set Openshift env variable')
+                logging.error('Failed to set openshift env variable "{0}"'.format(key))
+                raise OpenshiftError('Failed to set Openshift env variable')
 
     def _restart_app(self):
-        logging.info('Restarting application..')
+        logging.info('Restarting openshift application "{0}"'.format(self.app_name))
+        print 'Restarting openshift application "{0}"'.format(self.app_name)
         payload = {'event': 'restart'}
         r_json = self._call_openshift(self.app_data['links']['RESTART']['href'],
                 'post', payload)
         if r_json['status'] != 'ok':
-            raise Exception('Failed to restart Openshift app')
+            logging.error('Failed to restart openshift app "{0}"'.format(self.app_name))
+            raise OpenshiftError('Failed to restart Openshift app')
 
     def clone_app(self):
         if not self._app_repo:
-            logging.info('Clonning Openshift app "{0}"'.format(self.app_name))
+            logging.info('Clonning Openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
+            print 'Clonning Openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
             self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
 
     def verify_domain(self):
         """Verify that Openshift domain exists"""
         url = 'broker/rest/domains/{0}'.format(self.domain)
-        logging.info('Verifying Openshift domain "{0}"'.format(self.domain))
+        logging.info('Verifying openshift domain "{0}"'.format(self.domain))
         r_json = self._call_openshift(url)
         if r_json['status'] != 'ok':
-            raise Exception('Domain "{0}" not found'.format(self.domain))
+            logging.warn('Openshift domain "{0}" does not exist'.format(self.domain))
+            raise OpenshiftError('Failed to find openshift domain "{0}"'.format(self.domain))
+        logging.info('Openshift domain "{0}" looks OK'.format(self.domain))
+        print 'Openshift domain "{0}" looks OK'.format(self.domain)
 
     def verify_app(self):
         url = self.app_data['app_url'] + 'v1/_ping'
-        logging.info('Verifying Crane app status on url "{0}"'.format(url))
+        logging.info('Verifying openshift crane app status on url "{0}"'.format(url))
         r = requests.get(url)
-        logging.debug('Crane app HTTP status code: {0}'.format(r.status_code))
-        logging.debug('Crane app response: {0}'.format(r.text))
+        logging.debug('Openshift crane app HTTP status code: {0}'.format(r.status_code))
         if r.status_code != 200:
-            raise Exception('Crane ping HTTP status code is not "200" but: {0}'.format(r.status_code))
+            logging.warn('Openshift crane app ping HTTP status code is not "200" but: {0}'.format(r.status_code))
+            raise OpenshiftError('Failed to ping openshift crane app')
+        logging.debug('Openshift crane app response: {0}'.format(r.text))
         if r.text != 'true':
-            raise Exception('Crane ping response is not "true" but: {0}'.format(r.text))
+            logging.warn('Openshift crane ping response is not "true" but: {0}'.format(r.text))
+            raise OpenshiftError('Failed to ping openshift crane app')
+        logging.info('Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url']))
+        print 'Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url'])
 
     def status(self):
-        result = True
-        try:
-            self.verify_domain()
-            print 'Openshift domain "{0}" looks OK'.format(self.domain)
-            self.verify_app()
-            print 'Openshift Crane app on "{0}" looks alive'.format(self.app_data['app_url'])
-            self.clone_app()
-            print 'Cloned Openshift app "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
-            if self._isv_app_name:
-                cranefile = self._isv_app_crane_file
-                print 'ISV app crane file "{0}" exists'.format(cranefile)
-            else:
-                print 'Skipping ISV app crane file check as ISV app name was not specified'
-        except Exception as e:
-            logging.error('Failed to verify Openshift status: {0}'.format(e))
-            result = False
-        return result
+        logging.info('Checking openshift status')
+        self.verify_domain()
+        self.verify_app()
+        if self.isv_app_name:
+            self.isv_app_crane_file
+        else:
+            logging.info('Skipping ISV app crane file check as ISV app name was not specified')
+            print 'Skipping ISV app crane file check as ISV app name was not specified'
+        logging.info('Openshift status looks OK')
+        print 'Openshift status is OK'
 
     def create_domain(self):
         try:
             self.verify_domain()
             logging.info('Openshift domain "{0}" already exists'.format(self.domain))
-        except Exception:
+        except OpenshiftError:
             url = 'broker/rest/domains'
             payload = {'name': self.domain}
-            logging.info('Creating Openshift domain "{0}"'.format(self.domain))
+            logging.info('Creating openshift domain "{0}"'.format(self.domain))
             r_json = self._call_openshift(url, 'post', payload)
             if r_json['status'] != 'created':
-                raise Exception('Domain "{0}" could not be created'.format(self.domain))
+                logging.error('Domain "{0}" could not be created'.format(self.domain))
+                raise OpenshiftError('Domain "{0}" could not be created'.format(self.domain))
+            logging.info('Openshift domain "{0}" has been created'.format(self.domain))
+            print 'Openshift domain "{0}" has been created'.format(self.domain)
 
     def create_app(self, redhat_meta=None):
-        """Create an Openshift application"""
+        """Create an openshift application"""
         try:
             self.verify_app()
             logging.info('Openshift app "{0}" already exists'.format(self.app_name))
@@ -652,13 +710,13 @@ class Openshift(object):
                        'cartridge'      : self._cartridge,
                        'initial_git_url': self._app_git_url}
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
-            logging.info('Creating OpenShift application..')
+            logging.info('Creating openshift application "{0}"'.format(self.app_name))
+            print 'Creating openshift application "{0}"'.format(self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
             if r_json['status'] != 'created':
-                raise Exception('Failed to create Openshift app')
+                logging.error('Failed to create openshift app "{0}"'.format(self.app_name))
+                raise OpenshiftError('Failed to create openshift app "{0}"'.format(self.app_name))
             self._app_data = r_json['data']
-            logging.info('Created Openshift app "{0}" with ID "{1}"'\
-                         .format(self._app_data['app_url'], self._app_data['id']))
             self._set_env_vars()
             self._restart_app()
             sleep(5)
@@ -666,32 +724,41 @@ class Openshift(object):
                 self.update_app(redhat_meta)
             else:
                 self.verify_app()
+            logging.info('Created openshift app "{0}" with ID "{1}"'\
+                         .format(self.app_data['app_url'], self.app_data['id']))
+            print 'Created openshift application "{0}"'.format(self.app_name)
 
     def update_app(self, data_files):
         """Copy all config data_files to the crane/data directory"""
+        logging.info('Updating openshift crane app "{0}"'.format(self.app_name))
         if not data_files:
             logging.info('No configuration data supplied')
             return
+        print 'Updating openshift crane app "{0}"'.format(self.app_name)
         self.verify_app()
         self.clone_app()
-        logging.info('Updating Openshift crane app configuration')
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
-        dest_dir_rel = os.path.join('crane', 'data')
         files_to_add = []
         for i in data_files:
             shutil.copy(i, dest_dir)
-            files_to_add.append(os.path.join(dest_dir_rel, os.path.basename(i)))
+            files_to_add.append(os.path.join(dest_dir, os.path.basename(i)))
         self._app_repo.index.add(files_to_add)
         self._app_repo.index.commit('Updated crane configuration')
         self._app_repo.remotes.origin.push()
         sleep(5)
         self.verify_app()
+        logging.info('Openshift crane app "{0}" has been updated'.format(self.app_name))
+        print 'Openshift crane app "{0}" has been updated'.format(self.app_name)
 
     def cleanup(self):
         if self._app_local_dir:
-            logging.info('Removing local Openshift app dir "{0}"'.format(self._app_local_dir))
+            logging.info('Removing local openshift app dir "{0}"'.format(self._app_local_dir))
             shutil.rmtree(self._app_local_dir)
             self._app_local_dir = None
+
+
+class ConfigurationError(Exception):
+    pass
 
 
 class Configuration(object):
@@ -699,7 +766,6 @@ class Configuration(object):
 
     _CONFIG_FILE_NAME = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
-    _S3_URL = "https://s3.amazonaws.com"
 
     def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
                  oodomain=None, ooapp=None, s3bucket=None):
@@ -709,7 +775,7 @@ class Configuration(object):
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
         self._pulp_repo = None
-        self._config_branch = config_branch
+        self.config_branch = config_branch
         self.isv = isv
         self.isv_app_name = isv_app_name
         self.file_upload = file_upload
@@ -720,22 +786,34 @@ class Configuration(object):
         if os.path.isfile(self._CONFIG_FILE_NAME):
             self._conf_dir = os.getcwd()
             logging.info('Using configuration in current dir "{0}"'.format(self._conf_dir))
+            try:
+                self._config_repo = Repo(self._conf_dir)
+                logging.info('Found git repository in current dir "{0}"'.format(self._conf_dir))
+            except InvalidGitRepositoryError:
+                self._config_repo = None
+                logging.info('No repository found in current dir "{0}"'.format(self._conf_dir))
         else:
             repo_url = os.getenv(self._CONFIG_REPO_ENV_VAR)
             if not repo_url:
-                raise Exception('Current working directory does not contain "{0}" configuration file ' + \
-                        'and environment variable "{1}" is not set.'.format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
+                logging.error('Current working directory does not contain "{0}" ' + \
+                        'configuration file and environment variable "{1}" is ' + \
+                        'not set. One of these two options is required.'\
+                        .format(self._CONFIG_FILE_NAME, self._CONFIG_REPO_ENV_VAR))
+                raise ConfigurationError('Configuration file in current dir or ' + \
+                        '"{0}" env var is required'.format(self._CONFIG_REPO_ENV_VAR))
             self._conf_dir = mkdtemp()
-            logging.info('Clonning config repo from "{0}:{1}" to "{2}"'.format(repo_url, self._config_branch, self._conf_dir))
-            self._config_repo = Repo.clone_from(repo_url, self._conf_dir, branch=self._config_branch)
+            logging.info('Clonning config repo from "{0}:{1}" to "{2}"'.format(
+                    repo_url, self._config_branch, self._conf_dir))
+            self._config_repo = Repo.clone_from(repo_url, self._conf_dir,
+                    branch=self._config_branch)
 
         self._conf_file = os.path.join(self._conf_dir, self._CONFIG_FILE_NAME)
         if not os.path.isfile(self._conf_file):
-            raise Exception('Configuration file "{0}" not found'.format(self._conf_file))
+            logging.error('Config file "{0}" not found'.format(self._conf_file))
+            raise ConfigurationError('Missing config file')
         self._parsed_config = ConfigParser()
         self._parsed_config.read(self._conf_file)
-
-        logging.info('Using conf file "{0}"'.format(self._conf_file))
+        logging.info('Loaded config file "{0}"'.format(self._conf_file))
 
         self._setup_isv_config_dirs()
         self._setup_isv_config_file()
@@ -744,6 +822,14 @@ class Configuration(object):
     def config_branch(self):
         return self._config_branch
 
+    @config_branch.setter
+    def config_branch(self, val):
+        if not val:
+            logging.error('Git config branch is not defined')
+            raise ValueError('Git config branch is not defined')
+        self._config_branch = val.lower()
+        logging.debug('Git config branch set to "{0}"'.format(self._config_branch))
+
     @property
     def isv(self):
         return self._isv
@@ -751,9 +837,13 @@ class Configuration(object):
     @isv.setter
     def isv(self, val):
         if not val.isalnum():
-            raise ValueError('ISV "{0}" must contain only alphanumeric characters'.format(val))
+            logging.error('ISV "{0}" must contain only alphanumeric characters'.format(val))
+            raise ValueError('Invalid ISV name "{0}"'.format(val))
+        if len(val) > 16:
+            logging.error('ISV "{0}" must not be longer than 16 characters'.format(val))
+            raise ValueError('Invalid ISV name "{0}"'.format(val))
         self._isv = val.lower()
-        logging.debug('ISV set to "{0}"'.format(self.isv))
+        logging.debug('ISV set to "{0}"'.format(self._isv))
 
     @property
     def isv_app_name(self):
@@ -762,68 +852,97 @@ class Configuration(object):
     @isv_app_name.setter
     def isv_app_name(self, val):
         if val:
+            if val.count('/') != 1:
+                logging.error('ISV app name must contain exactly one "/": {0}'.format(val))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            val = val.lower()
+            repo, app = val.split('/')
+            if not 4 <= len(repo) <= 30:
+                logging.error('Namespace part of ISV app name must have between 4 and 30 characters: {0}'.format(repo))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            if not re.match('^[a-z0-9_]+$', repo):
+                logging.error('Namespace part of ISV app name must contain only [a-z0-9_] characters: {0}'.format(repo))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            if not re.match('^[a-z0-9-_.]+$', app):
+                logging.error('App name part of ISV app name must contain only [a-z0-9-_.] characters: {0}'.format(app))
+                raise ValueError('Invalid ISV app name "{0}"'.format(val))
             self._isv_app_name = val.replace('/', '-')
         else:
             self._isv_app_name = None
-        logging.debug('ISV app name set to "{0}"'.format(self.isv_app_name))
+        logging.debug('ISV app name set to "{0}"'.format(self._isv_app_name))
 
     @property
     def oodomain(self):
-        if self._oodomain:
-            return self._oodomain
-        else:
-            return self.isv
+        return self._oodomain
 
     @oodomain.setter
     def oodomain(self, val):
         if val:
             if not val.isalnum():
-                raise ValueError('Openshift domain "{0}" must contain only alphanumeric characters'.format(val))
+                logging.error('Openshift domain "{0}" must contain only alphanumeric characters'.format(val))
+                raise ValueError('Invalid openshift domain "{0}"'.format(val))
+            if len(val) > 16:
+                logging.error('Openshift domain "{0}" must not be longer than 16 characters'.format(val))
+                raise ValueError('Invalid openshift domain "{0}"'.format(val))
             self._oodomain = val.lower()
-            logging.debug('Openshift domain set to "{0}"'.format(self.isv))
         else:
-            self._oodomain = None
+            self._oodomain = self.isv
+        logging.debug('Openshift domain set to "{0}"'.format(self._oodomain))
 
     @property
     def ooapp(self):
-        if self._ooapp:
-            return self._ooapp
-        else:
-            return 'registry'
+        return self._ooapp
 
     @ooapp.setter
     def ooapp(self, val):
         if val:
             if not val.isalnum():
-                raise ValueError('Openshift app name "{0}" must contain only alphanumeric characters'.format(val))
+                logging.error('Openshift app name "{0}" must contain only alphanumeric characters'.format(val))
+                raise ValueError('Invalid openshift app name "{0}"'.format(val))
+            if len(val) > 32:
+                logging.error('Openshift app name "{0}" must not be longer than 32 characters'.format(val))
+                raise ValueError('Invalid openshift app name "{0}"'.format(val))
             self._ooapp = val.lower()
-            logging.debug('Openshift app name set to "{0}"'.format(self.isv))
-        self._ooapp = None
+        else:
+            self._ooapp = 'registry'
+        logging.debug('Openshift app name set to "{0}"'.format(self._ooapp))
 
     @property
     def s3bucket(self):
-        if self._s3bucket:
-            return self._s3bucket
-        else:
-            return self.isv + '.bucket'
+        return self._s3bucket
 
     @s3bucket.setter
     def s3bucket(self, val):
         if val:
-            self._s3bucket = val.lower()
-            logging.debug('S3 bucket name set to "{0}"'.format(self.isv))
+            val = val.lower()
+            if not re.match('^[a-z0-9-_.]+$', val):
+                logging.error('S3 bucket name "{0}" must contain only [a-z0-9-_.] characters'.format(val))
+                raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
+            if len(val) > 32:
+                logging.error('S3 bucket name "{0}" must not be longer than 32 characters'.format(val))
+                raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
+            self._s3bucket = val
         else:
-            self._s3bucket = None
+            self._s3bucket = self.isv + '.bucket'
+        logging.debug('S3 bucket name set to "{0}"'.format(self._s3bucket))
 
     @property
     def _pulp_redirect_url(self):
-        """Returns Pulp server redirect URL for S3 bucket"""
-        if self._isv_app_name:
-            return '/'.join([self._S3_URL,
-                             self._parsed_config.get(self.isv, 's3_bucket'),
-                             self._isv_app_name])
-        else:
+        """Returns pulp redirect URL for S3 bucket"""
+        if not self._isv_app_name:
+            logging.info('Pulp redirect URL is None')
             return None
+        r_url = '/'.join([self._parsed_config.get('aws', 'aws_url'),
+                self._parsed_config.get(self.isv, 's3_bucket'),
+                self._isv_app_name])
+        logging.info('Pulp redirect URL: {0}'.format(r_url))
+        return r_url
+
+    @property
+    def logfile(self):
+        l_file = os.path.join(self._logdir, date.today().isoformat() + '.log')
+        logging.debug('Using "{0}" as log file'.format(l_file))
+        return l_file
 
     @property
     def pulp_conf(self):
@@ -858,21 +977,25 @@ class Configuration(object):
                 'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
     def commit_all_changes(self):
-        # NOTE: we will use the branch specified in self.config_branch
-        #self._config_repo._index.add(FIXME)
-        #self._config_repo._index.commit(FIXME)
-        #self._config_repo.remotes.origin.push()
-        raise NotImplemented()
+        if self._config_repo:
+            logging.info('Committing changes in config repo')
+            # TODO: add crane config file from meta dir
+            files = [self._conf_file, self.logfile]
+            self._config_repo.index.add(files)
+            self._config_repo.index.commit('Updated configuration by raas script')
+            self._config_repo.remotes.origin.push()
 
     def _setup_isv_config_dirs(self):
-        logdir = os.path.join(self._conf_dir, self.isv, 'logs')
-        metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
-        if not os.path.exists(logdir):
-            logging.info('Creating log dir "{0}"'.format(logdir))
-            os.makedirs(logdir)
-        if not os.path.exists(metadir):
-            logging.info('Creating metadata dir "{0}"'.format(metadir))
-            os.makedirs(metadir)
+        self._logdir = os.path.join(self._conf_dir, self.isv, 'logs')
+        self._metadir = os.path.join(self._conf_dir, self.isv, 'metadata')
+        if not os.path.exists(self._logdir):
+            logging.info('Creating log dir "{0}"'.format(self._logdir))
+            os.makedirs(self._logdir)
+        if not os.path.exists(self._metadir):
+            logging.info('Creating metadata dir "{0}"'.format(self._metadir))
+            os.makedirs(self._metadir)
+        logging.debug('Using "{0}" as log dir'.format(self._logdir))
+        logging.debug('Using "{0}" as meta dir'.format(self._metadir))
 
     def _setup_isv_config_file(self):
         """Setup config file defaults if not provided"""
@@ -884,48 +1007,68 @@ class Configuration(object):
             self._parsed_config.set(self.isv, 's3_bucket', self.s3bucket)
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)
+            logging.debug('ISV openshift domain set to "{0}"'.format(self.oodomain))
+            logging.debug('ISV openshift app name set to "{0}"'.format(self.ooapp))
+            logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
 
 
 def main():
     """Entrypoint for script"""
     isv_args = ['isv']
     isv_kwargs = {'metavar': 'ISV_NAME',
-                  'help': 'ISV name matching config file section'}
+            'help': 'ISV name matching config file section'}
     isv_app_args = ['isv_app']
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
-                      'help': 'ISV Application name. Example: "some/app"'}
-    parser = ArgumentParser()
-    parser.add_argument('-l', '--log', metavar='LOG_LEVEL',
-            help='Desired log level. Can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL. Default is WARNING.')
+            'help': 'ISV application name, for example: "some/app"'}
+    parser = ArgumentParser(
+            description='This script is used to automate publishing of certified docker images from ISVs (Independent Software Vendors)')
     parser.add_argument('-n', '--nocommit', action='store_true',
-                        help='Do not commit configuration. Development only.')
+            help='do not commit configuration (development only)')
+    parser.add_argument('-l', '--log', metavar='LOG_LEVEL', default='WARNING',
+            choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+            help='desired log level one of "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL". Default is "WARNING"')
     parser.add_argument('-c', '--configenv', metavar='BRANCH', default='stage',
-                        choices=['dev', 'stage', 'master'],
-                        help='Working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
-    subparsers = parser.add_subparsers(help='sub-command help', dest='action')
-    status_parser = subparsers.add_parser('status', help='Check configuration status')
+            choices=['dev', 'stage', 'master'],
+            help='working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
+    subparsers = parser.add_subparsers(dest='action')
+    status_parser = subparsers.add_parser('status',
+            help='check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
     status_parser.add_argument('-a', '--isv_app', **isv_app_kwargs)
     status_parser.add_argument('-p', '--pulp', action='store_true',
-                        help='Include checking the pulp server status')
-    setup_parser = subparsers.add_parser('setup', help='Setup initial configuration')
+            help='include checking the pulp server status')
+    setup_parser = subparsers.add_parser('setup',
+            help='setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
-    setup_parser.add_argument('--oodomain', help='Openshift domain for this ISV, default is ISV name')
-    setup_parser.add_argument('--ooapp', help='Openshift crane app name for this ISV, default is "registry"')
-    setup_parser.add_argument('--s3bucket', help='AWS S3 bucket name for this ISV, default is [ISV_NAME].bucket')
-    publish_parser = subparsers.add_parser('publish', help='Publish new or updated image')
+    setup_parser.add_argument('--oodomain',
+            help='openshift domain for this ISV if ISV is not set in config file, default is ISV name')
+    setup_parser.add_argument('--ooapp',
+            help='openshift crane app name for this ISV if ISV is not set in config file, default is "registry"')
+    setup_parser.add_argument('--s3bucket',
+            help='AWS S3 bucket name for this ISV if ISV is not set in config file, default is [ISV_NAME].bucket')
+    publish_parser = subparsers.add_parser('publish',
+            help='publish new or updated image')
     publish_parser.add_argument(*isv_args, **isv_kwargs)
     publish_parser.add_argument(*isv_app_args, **isv_app_kwargs)
-    pulp_upload_parser = subparsers.add_parser('pulp-upload', help='Upload image to pulp')
+    pulp_upload_parser = subparsers.add_parser('pulp-upload',
+            help='upload image to pulp')
     pulp_upload_parser.add_argument(*isv_args, **isv_kwargs)
     pulp_upload_parser.add_argument(*isv_app_args, **isv_app_kwargs)
-    pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar', help='File to upload to pulp server. Output of of "docker save some/image > image.tar".')
+    pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar',
+            help='file to upload to pulp server. Output of "docker save some/image > image.tar"')
     args = parser.parse_args()
 
-    if args.log:
-        log_level = getattr(logging, args.log.upper(), None)
-        if isinstance(log_level, int):
-            logging.basicConfig(level=log_level)
+    logFormatter = logging.Formatter('%(asctime)s - {0} - %(name)s - %(levelname)s - %(message)s'.format(args.action.upper()))
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    consoleHandler = logging.StreamHandler()
+    consoleHandler.setFormatter(logFormatter)
+    log_level = getattr(logging, args.log.upper(), None)
+    if not isinstance(log_level, int):
+        print 'Invalid value passed to the --log option. See help for possible values.'
+        sys.exit(1)
+    consoleHandler.setLevel(log_level)
+    logger.addHandler(consoleHandler)
 
     try:
         config_kwargs = {}
@@ -949,6 +1092,11 @@ def main():
     except Exception as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
         sys.exit(1)
+
+    fileHandler = logging.FileHandler(config.logfile)
+    fileHandler.setFormatter(logFormatter)
+    fileHandler.setLevel(logging.DEBUG)
+    logger.addHandler(fileHandler)
 
     try:
         openshift = Openshift(**config.openshift_conf)

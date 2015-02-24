@@ -900,17 +900,22 @@ class Configuration(object):
     @isv_app_name.setter
     def isv_app_name(self, val):
         if val:
-            if val.count('/') != 1:
-                logging.error('ISV app name must contain exactly one "/": {0}'.format(val))
+            if val.count('/') > 1:
+                logging.error('ISV app name must contain no more than one "/": {0}'.format(val))
                 raise ValueError('Invalid ISV app name "{0}"'.format(val))
             val = val.lower()
-            repo, app = val.split('/')
-            if not 4 <= len(repo) <= 30:
-                logging.error('Namespace part of ISV app name must have between 4 and 30 characters: {0}'.format(repo))
-                raise ValueError('Invalid ISV app name "{0}"'.format(val))
-            if not re.match('^[a-z0-9_]+$', repo):
-                logging.error('Namespace part of ISV app name must contain only [a-z0-9_] characters: {0}'.format(repo))
-                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            if val.count('/') == 1:
+                repo, app = val.split('/')
+            else:
+                repo = None
+                app = val
+            if repo:
+                if not 4 <= len(repo) <= 30:
+                    logging.error('Namespace part of ISV app name must have between 4 and 30 characters: {0}'.format(repo))
+                    raise ValueError('Invalid ISV app name "{0}"'.format(val))
+                if not re.match('^[a-z0-9_]+$', repo):
+                    logging.error('Namespace part of ISV app name must contain only [a-z0-9_] characters: {0}'.format(repo))
+                    raise ValueError('Invalid ISV app name "{0}"'.format(val))
             if not re.match('^[a-z0-9-_.]+$', app):
                 logging.error('App name part of ISV app name must contain only [a-z0-9-_.] characters: {0}'.format(app))
                 raise ValueError('Invalid ISV app name "{0}"'.format(val))

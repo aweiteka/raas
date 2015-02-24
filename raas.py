@@ -239,17 +239,41 @@ class PulpServer(object):
         else:
             logging.info('Pulp upload ID is not set')
 
+    def _get_app_name_from_image(self, file_upload):
+        logging.info('Getting app name from the image "{0}"'.format(file_upload))
+        print 'Getting app name from the image "{0}"'.format(file_upload)
+        logging.info('Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir))
+        print 'Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir)
+        with tarfile.open(file_upload) as tar:
+            tar.extractall(self.data_dir)
+        with open(os.path.join(self.data_dir, 'repositories')) as f:
+            data = json.load(f)
+            self._isv_app_name = data.keys()[0]
+        if not self._isv_app_name:
+            logging.error('Missing app name in the "repositories" file')
+            raise PulpError('Missing app name in the "repositories" file')
+        logging.info('Got "{0}" as app name from the image "{1}"'.format(
+                self._isv_app_name, file_upload))
+        print 'Got "{0}" as app name from the image "{1}"'.format(
+                self._isv_app_name, file_upload)
+
     def upload_image(self, file_upload):
         """Upload image to pulp repository"""
         if not os.path.isfile(file_upload):
             logging.error('Cannot find file to upload to pulp "{0}"'.format(file_upload))
             raise PulpError('Cannot find file "{0}"'.format(file_upload))
         self.status()
+        if not self._isv_app_name:
+            self._get_app_name_from_image(file_upload)
         self._create_repo()
         self._upload_bits(file_upload)
         self._import_upload()
         self._delete_upload_id()
         self._publish_repo()
+        logging.info('Image "{0}" uploaded to pulp repo "{1}"'.format(
+                file_upload, self.repo_id))
+        print 'Image "{0}" uploaded to pulp repo "{1}"'.format(
+                file_upload, self.repo_id)
 
     def _upload_bits(self, file_upload):
         logging.info('Uploading file "{0}" to pulp'.format(file_upload))
@@ -1047,6 +1071,7 @@ def main():
     isv_kwargs = {'metavar': 'ISV_NAME',
             'help': 'ISV name matching config file section'}
     isv_app_args = ['isv_app']
+    isv_app_opt_args = ['-a', '--isv_app']
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
             'help': 'ISV application name, for example: "some/app"'}
     parser = ArgumentParser(
@@ -1063,7 +1088,7 @@ def main():
     status_parser = subparsers.add_parser('status',
             help='check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
-    status_parser.add_argument('-a', '--isv_app', **isv_app_kwargs)
+    status_parser.add_argument(*isv_app_opt_args, **isv_app_kwargs)
     status_parser.add_argument('-p', '--pulp', action='store_true',
             help='include checking the pulp server status')
     setup_parser = subparsers.add_parser('setup',
@@ -1082,7 +1107,7 @@ def main():
     pulp_upload_parser = subparsers.add_parser('pulp-upload',
             help='upload image to pulp')
     pulp_upload_parser.add_argument(*isv_args, **isv_kwargs)
-    pulp_upload_parser.add_argument(*isv_app_args, **isv_app_kwargs)
+    pulp_upload_parser.add_argument(*isv_app_opt_args, **isv_app_kwargs)
     pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar',
             help='file to upload to pulp server. Output of "docker save some/image > image.tar"')
     args = parser.parse_args()
@@ -1225,10 +1250,6 @@ def main():
     elif args.action == 'pulp-upload':
         try:
             pulp.upload_image(config.file_upload)
-            logging.info('Image "{0}" uploaded to pulp repo "{1}"'.format(
-                    config.file_upload, pulp.repo_id))
-            print 'Image "{0}" uploaded to pulp repo "{1}"'.format(
-                    config.file_upload, pulp.repo_id)
         except PulpError as e:
             logging.error('Failed to upload image to pulp: {0}'.format(e))
             ret = 1

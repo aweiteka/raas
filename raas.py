@@ -21,11 +21,22 @@ from tempfile import mkdtemp
 from time import sleep
 
 
+class PulpError(Exception):
+    pass
+
+
 class PulpServer(object):
-    """Interact with Pulp API"""
+    """Interact with pulp API"""
+
+    _WEB_DISTRIBUTOR    = 'docker_web_distributor_name_cli'
+    _EXPORT_DISTRIBUTOR = 'docker_export_distributor_name_cli'
+    _IMPORTER           = 'docker_importer'
+    _EXPORT_DIR         = '/var/www/pub/docker/web/'
+    _UNIT_TYPE_ID       = 'docker_image'
+    _CHUNK_SIZE         = 1048576 # 1 MB per upload call
 
     def __init__(self, server_url, username, password, verify_ssl, isv,
-                 isv_app_name, redirect_url):
+            isv_app_name, redirect_url):
         self._upload_id = None
         self._repo_id = None
         self._data_dir = None
@@ -37,12 +48,6 @@ class PulpServer(object):
         self._isv = isv
         self._isv_app_name = isv_app_name
         self._redirect_url = redirect_url
-        self._web_distributor = 'docker_web_distributor_name_cli'
-        self._export_distributor = 'docker_export_distributor_name_cli'
-        self._importer = 'docker_importer'
-        self._export_dir = '/var/www/pub/docker/web/'
-        self._unit_type_id = 'docker_image'
-        self._chunk_size = 1048576 # 1 MB per upload call
 
     @property
     def server_url(self):
@@ -64,7 +69,10 @@ class PulpServer(object):
 
     @property
     def repo_id(self):
-        if not self._repo_id and self._isv_app_name:
+        if not self._repo_id:
+            if not self._isv_app_name:
+                logging.error('ISV app name is required for pulp repo ID')
+                raise ConfigurationError('Missing ISV app name')
             self._repo_id = '-'.join([self._isv, self._isv_app_name])
         return self._repo_id
 
@@ -82,37 +90,38 @@ class PulpServer(object):
     def upload_id(self):
         """Get a pulp upload ID"""
         if not self._upload_id:
+            logging.info('Getting pulp upload ID')
             url = '{0}/pulp/api/v2/content/uploads/'.format(self.server_url)
+            # TODO: shouldn't this call be 'get' instead of 'post'?
             r_json = self._call_pulp(url, 'post')
-            if 'error_message' in r_json:
-                raise Exception('Unable to get a pulp upload ID')
             self._upload_id = r_json['upload_id']
             logging.info('Received pulp upload ID: {0}'.format(self._upload_id))
         return self._upload_id
 
     def _call_pulp(self, url, req_type='get', payload=None, return_json=True, p_stream=False):
         if req_type == 'get':
-            logging.info('Calling Pulp URL "{0}"'.format(url))
+            logging.info('Calling pulp URL "{0}"'.format(url))
             r = requests.get(url, auth=(self._username, self._password), verify=self._verify_ssl, stream=p_stream)
         elif req_type == 'post':
-            logging.info('Posting to Pulp URL "{0}"'.format(url))
+            logging.info('Posting to pulp URL "{0}"'.format(url))
             if payload:
                 logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
             r = requests.post(url, auth=(self._username, self._password), data=json.dumps(payload), verify=self._verify_ssl)
         elif req_type == 'put':
             # some calls pass in binary data so we don't log payload data or json encode it here
-            logging.info('Putting to Pulp URL "{0}"'.format(url))
+            logging.info('Putting to pulp URL "{0}"'.format(url))
             r = requests.put(url, auth=(self._username, self._password), data=payload, verify=self._verify_ssl)
         elif req_type == 'delete':
-            logging.info('Delete call to Pulp URL "{0}"'.format(url))
+            logging.info('Delete call to pulp URL "{0}"'.format(url))
             r = requests.delete(url, auth=(self._username, self._password), verify=self._verify_ssl)
         else:
-            raise ValueError('Invalid value of "req_type" parameter: {0}'.format(req_type))
+            logging.error('Invalid value of "req_type" parameter: {0}'.format(req_type))
+            raise ValueError('Invalid value of "req_type" parameter')
 
         logging.debug('Pulp HTTP status code: {0}'.format(r.status_code))
-
-        if r.status_code >= 400:
-            raise Exception('Received invalid status code: {0}'.format(r.status_code))
+        if r.status_code >= 500:
+            logging.error('Received invalid status code from pulp: {0}'.format(r.status_code))
+            raise PulpError('Received invalid status code: {0}'.format(r.status_code))
 
         if return_json:
             r_json = r.json()
@@ -122,7 +131,8 @@ class PulpServer(object):
             logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
             if 'error_message' in r_json:
-                logging.warn('Error messages from Pulp response:\n{0}'.format(r_json['error_message']))
+                logging.error('Error messages from Pulp response: {0}'.format(r_json['error_message']))
+                raise PulpError('Received error messages from pulp')
 
             if 'spawned_tasks' in r_json:
                 for task in r_json['spawned_tasks']:
@@ -133,200 +143,234 @@ class PulpServer(object):
 
     def _watch_task(self, tid, thref, timeout=60, poll=5):
         """Watch a task ID and return when it finishes or fails"""
-        logging.info('Waiting up to "{0}" seconds for task "{1}"...'.format(timeout, tid))
+        logging.info('Waiting up to "{0}" seconds for pulp task "{1}"'.format(timeout, tid))
         curr = 0
         while curr < timeout:
             t = self._call_pulp('{0}{1}'.format(self.server_url, thref))
             if t['state'] == 'finished':
-                logging.info('Subtask "{0}" completed'.format(tid))
-                return True
+                logging.info('Pulp subtask "{0}" completed'.format(tid))
+                return
             elif t['state'] == 'error':
-                logging.error('Subtask "{0}" had an error: {1}'.format(tid, t['error']))
-                logging.debug('Traceback from subtask "{0}":\n{1}'.format(tid, t['traceback']))
-                raise Exception('Pulp task "{0}" failed with error: {1}'.format(tid, t['error']))
+                logging.error('Pulp subtask "{0}" had an error: {1}'.format(tid, t['error']))
+                logging.debug('Traceback from pulp subtask "{0}":\n{1}'.format(tid, t['traceback']))
+                raise PulpError('Pulp task "{0}" failed'.format(tid))
             else:
-                logging.debug('Waiting for task "{0}" ({1}/{2} seconds passed)'.format(tid, curr, timeout))
+                logging.debug('Waiting for pulp task "{0}" ({1}/{2} seconds passed)'.format(tid, curr, timeout))
+                print 'Waiting for pulp task... ({1}/{2} seconds passed)'.format(curr, timeout)
                 sleep(poll)
                 curr += poll
         logging.error('Timed out waiting for pulp task "{0}"'.format(tid))
-        raise Exception('Timed out waiting for pulp task "{0}"'.format(tid))
+        raise PulpError('Timed out waiting for pulp task "{0}"'.format(tid))
 
     def status(self):
         """Check pulp server status"""
-        logging.info('Verifying Pulp server status..')
+        logging.info('Checking pulp status')
         self._call_pulp('{0}/pulp/api/v2/status/'.format(self.server_url))
-        print 'Pulp server looks OK'
+        logging.info('Pulp status looks OK')
+        print 'Pulp status is OK'
 
     def verify_repo(self):
         """Verify pulp repository exists"""
         url = '{0}/pulp/api/v2/repositories/{1}/'.format(self.server_url, self.repo_id)
         logging.info('Verifying pulp repository "{0}"'.format(self.repo_id))
-        r_json = self._call_pulp(url)
-        if 'error_message' in r_json:
-            raise Exception('Repository "{0}" not found'.format(self.repo_id))
-        print 'Pulp repository looks OK'
+        self._call_pulp(url)
+        logging.info('Pulp repository "{0}" looks OK'.format(self.repo_id))
+        print 'Pulp repository is OK'
 
-    def is_repo(self):
-        """Return true if repo exists"""
-        url = '{0}/pulp/api/v2/repositories/'.format(self.server_url)
-        logging.info('Verifying pulp repository "{0}"'.format(self.repo_id))
-        r_json = self._call_pulp(url)
-        return self.repo_id in [repo['id'] for repo in r_json]
-
-    def create_repo(self):
+    def _create_repo(self):
         """Create pulp docker repository"""
-        payload = {
-        'id': self.repo_id,
-        'display_name': '{0} {1}'.format(self._isv, self._isv_app_name),
-        'description': 'docker image repository for ISV {0}'.format(self._isv),
-        'notes': {
-            '_repo-type': 'docker-repo'
-        },
-        'importer_type_id': self._importer,
-        'importer_config': {},
-        'distributors': [{
-            'distributor_type_id': 'docker_distributor_web',
-            'distributor_id': self._web_distributor,
-            'config': {
-                'repo-registry-id': self._isv_app_name},
-            'auto_publish': 'true'},
-            {
-            'distributor_type_id': 'docker_distributor_export',
-            'distributor_id': self._export_distributor,
-            'config': {
-                'repo-registry-id': self._isv_app_name},
-            'docker_publish_directory': self._export_dir,
-            'auto_publish': 'true'}
-            ]
-        }
-        url = '{0}/pulp/api/v2/repositories/'.format(self.server_url)
-        logging.info('Verifying pulp repository "{0}"'.format(self.repo_id))
-        r_json = self._call_pulp(url, "post", payload)
-        if 'error_message' in r_json:
-            raise Exception('Failed to create repository "{0}"'.format(self.repo_id))
+        try:
+            self.verify_repo()
+            logging.info('Pulp repository "{0}" already exists'.format(self.repo_id))
+            print 'Pulp repository "{0}" already exists'.format(self.repo_id)
+        except PulpError:
+            payload = {
+                'id': self.repo_id,
+                'display_name': '{0} {1}'.format(self._isv, self._isv_app_name),
+                'description': 'docker image repository for ISV {0}'.format(self._isv),
+                'notes': {
+                    '_repo-type': 'docker-repo'
+                },
+                'importer_type_id': self._IMPORTER,
+                'importer_config': {},
+                'distributors': [{
+                    'distributor_type_id': 'docker_distributor_web',
+                    'distributor_id': self._WEB_DISTRIBUTOR,
+                    'config': {
+                        'repo-registry-id': self._isv_app_name},
+                    'auto_publish': 'true'},
+                    {
+                    'distributor_type_id': 'docker_distributor_export',
+                    'distributor_id': self._EXPORT_DISTRIBUTOR,
+                    'config': {
+                        'repo-registry-id': self._isv_app_name},
+                    'docker_publish_directory': self._EXPORT_DIR,
+                    'auto_publish': 'true'}
+                    ]
+            }
+            url = '{0}/pulp/api/v2/repositories/'.format(self.server_url)
+            logging.info('Creating pulp repository "{0}"'.format(self.repo_id))
+            self._call_pulp(url, 'post', payload)
+            logging.info('Created pulp repository "{0}"'.format(self.repo_id))
+            print 'Created pulp repository "{0}"'.format(self.repo_id)
 
-    def update_redirect_url(self):
+    def _update_redirect_url(self):
         """Update distributor redirect URL and export file"""
         url = '{0}/pulp/api/v2/repositories/{1}/'.format(self.server_url, self.repo_id)
         payload = {
-                'distributor_configs': {
-                        self._export_distributor: {
-                            'redirect-url': self._redirect_url
-                        }
+            'distributor_configs': {
+                self._EXPORT_DISTRIBUTOR: {
+                    'redirect-url': self._redirect_url
                 }
+            }
         }
-        logging.info('Update pulp repository "{0}" URL "{1}"'.format(self.repo_id, self._redirect_url))
-        r_json = self._call_pulp(url, 'put', json.dumps(payload))
-        if 'error_message' in r_json:
-            raise Exception('Unable to update pulp repo "{0}"'.format(self.repo_id))
-        print 'Updated pulp redirect URL for repo "{0}"'.format(self.repo_id)
+        logging.info('Updating pulp repository "{0}" URL to "{1}"'.format(self.repo_id, self._redirect_url))
+        self._call_pulp(url, 'put', json.dumps(payload))
+        logging.info('Updated pulp repository "{0}" URL to "{1}"'.format(self.repo_id, self._redirect_url))
 
     def _delete_upload_id(self):
         """Delete upload request ID"""
-        logging.info('Deleting pulp upload ID {0}'.format(self.upload_id))
-        url = '{0}/pulp/api/v2/content/uploads/{1}/'.format(self.server_url, self.upload_id)
-        self._call_pulp(url, 'delete')
-        self._upload_id = None
+        if self._upload_id:
+            logging.info('Deleting pulp upload ID "{0}"'.format(self._upload_id))
+            url = '{0}/pulp/api/v2/content/uploads/{1}/'.format(self.server_url, self._upload_id)
+            self._call_pulp(url, 'delete')
+            self._upload_id = None
+            logging.info('Deleted pulp upload ID "{0}"'.format(self._upload_id))
+        else:
+            logging.info('Pulp upload ID is not set')
+
+    def _get_app_name_from_image(self, file_upload):
+        logging.info('Getting app name from the image "{0}"'.format(file_upload))
+        print 'Getting app name from the image "{0}"'.format(file_upload)
+        logging.info('Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir))
+        print 'Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir)
+        with tarfile.open(file_upload) as tar:
+            tar.extractall(self.data_dir)
+        with open(os.path.join(self.data_dir, 'repositories')) as f:
+            data = json.load(f)
+            self._isv_app_name = data.keys()[0]
+        if not self._isv_app_name:
+            logging.error('Missing app name in the "repositories" file')
+            raise PulpError('Missing app name in the "repositories" file')
+        logging.info('Got "{0}" as app name from the image "{1}"'.format(
+                self._isv_app_name, file_upload))
+        print 'Got "{0}" as app name from the image "{1}"'.format(
+                self._isv_app_name, file_upload)
 
     def upload_image(self, file_upload):
         """Upload image to pulp repository"""
-        if os.path.isfile(file_upload):
-            self._upload_bits(file_upload)
-            self._import_upload()
-            self._delete_upload_id()
-            self._publish_repo()
-        else:
-            raise Exception('Cannot find file "{0}"'.format(file_upload))
+        if not os.path.isfile(file_upload):
+            logging.error('Cannot find file to upload to pulp "{0}"'.format(file_upload))
+            raise PulpError('Cannot find file "{0}"'.format(file_upload))
+        self.status()
+        if not self._isv_app_name:
+            self._get_app_name_from_image(file_upload)
+        self._create_repo()
+        self._upload_bits(file_upload)
+        self._import_upload()
+        self._delete_upload_id()
+        self._publish_repo()
+        logging.info('Image "{0}" uploaded to pulp repo "{1}"'.format(
+                file_upload, self.repo_id))
+        print 'Image "{0}" uploaded to pulp repo "{1}"'.format(
+                file_upload, self.repo_id)
 
     def _upload_bits(self, file_upload):
-        logging.info('Uploading file "{0}"'.format(file_upload))
+        logging.info('Uploading file "{0}" to pulp'.format(file_upload))
         offset = 0
         source_file_size = os.path.getsize(file_upload)
         with open(file_upload, 'r') as f:
             while True:
                 f.seek(offset)
-                data = f.read(self._chunk_size)
+                data = f.read(self._CHUNK_SIZE)
                 if not data:
                     break
                 url = '{0}/pulp/api/v2/content/uploads/{1}/{2}/'.format(self.server_url, self.upload_id, offset)
-                logging.info('Uploading "{0}": {1} of {2} bytes'.format(file_upload, offset, source_file_size))
+                logging.info('Uploading "{0}": {1:.1f} of {2:.1f} MB done'.format(file_upload,  offset / 1048576.0, source_file_size / 1048576.0))
+                print 'Uploading file "{0}" to pulp: {1:.1f} of {2:.1f} MB done'.format(file_upload, offset / 1048576.0, source_file_size / 1048576.0)
                 self._call_pulp(url, 'put', data)
-                offset = min(offset + self._chunk_size, source_file_size)
+                offset = min(offset + self._CHUNK_SIZE, source_file_size)
+        logging.info('File "{0}" uploaded to pulp'.format(file_upload))
+        print 'File "{0}" uploaded to pulp'.format(file_upload)
 
     def _import_upload(self):
         """Import uploaded content"""
         logging.info('Importing pulp upload {0} into {1}'.format(self.upload_id, self.repo_id))
         url = '{0}/pulp/api/v2/repositories/{1}/actions/import_upload/'.format(self.server_url, self.repo_id)
         payload = {
-          'upload_id': self.upload_id,
-          'unit_type_id': self._unit_type_id,
-          'unit_key': None,
-          'unit_metadata': None,
-          'override_config': None
+            'upload_id': self.upload_id,
+            'unit_type_id': self._UNIT_TYPE_ID,
+            'unit_key': None,
+            'unit_metadata': None,
+            'override_config': None
         }
-        r_json = self._call_pulp(url, 'post', payload)
-        if 'error_message' in r_json:
-            raise Exception('Unable to import pulp content into {0}'.format(self.repo_id))
+        self._call_pulp(url, 'post', payload)
+        logging.info('Imported pulp upload {0} into {1}'.format(self.upload_id, self.repo_id))
 
     def _publish_repo(self):
         """Publish pulp repository to pulp web server"""
         url = '{0}/pulp/api/v2/repositories/{1}/actions/publish/'.format(self.server_url, self.repo_id)
         payload = {
-          'id': self._web_distributor,
-          'override_config': {}
+            'id': self._WEB_DISTRIBUTOR,
+            'override_config': {}
         }
         logging.info('Publishing pulp repository "{0}"'.format(self.repo_id))
-        r_json = self._call_pulp(url, 'post', payload)
-        if 'error_message' in r_json:
-            raise Exception('Unable to publish pulp repo "{0}"'.format(self.repo_id))
+        self._call_pulp(url, 'post', payload)
+        logging.info('Published pulp repository "{0}"'.format(self.repo_id))
 
-    def export_repo(self):
-        """Export pulp repository to pulp web server as tar
+    def _export_repo(self):
+        """Export pulp repository to pulp web server as tar file.
 
         The tarball is split into the layer components and crane metadata.
         It is for the purpose of uploading to remote crane server"""
         url = '{0}/pulp/api/v2/repositories/{1}/actions/publish/'.format(self.server_url, self.repo_id)
         payload = {
-          'id': self._export_distributor,
-          'override_config': {
-            'export_file': '{0}{1}.tar'.format(self._export_dir, self.repo_id),
-          }
+            'id': self._EXPORT_DISTRIBUTOR,
+            'override_config': {
+                'export_file': '{0}{1}.tar'.format(self._EXPORT_DIR, self.repo_id),
+            }
         }
         logging.info('Exporting pulp repository "{0}"'.format(self.repo_id))
-        r_json = self._call_pulp(url, 'post', payload)
-        if 'error_message' in r_json:
-            raise Exception('Unable to export pulp repo "{0}"'.format(self.repo_id))
-        print 'Exported pulp repo "{0}"'.format(self.repo_id)
+        self._call_pulp(url, 'post', payload)
+        logging.info('Exported pulp repository "{0}"'.format(self.repo_id))
 
     def remove_orphan_content(self, content_type='docker_image'):
         """Remove orphan content"""
-        if self._list_orphans():
-            logging.info('Removing orphaned content "{0}"'.format(content_type))
+        if self._list_orphans(content_type):
+            logging.info('Removing orphaned "{0}" content'.format(content_type))
             url = '{0}/pulp/api/v2/content/orphans/{1}/'.format(self.server_url, content_type)
-            r_json = self._call_pulp(url, 'delete')
-            if 'error_message' in r_json:
-                raise Exception('Unable to remove orphaned content type "{0}"'.format(content_type))
+            self._call_pulp(url, 'delete')
+            logging.info('Removed orphaned "{0}" content'.format(content_type))
 
     def _list_orphans(self, content_type='docker_image'):
         """List (log) orphan content. Defaults to docker content"""
         url = '{0}/pulp/api/v2/content/orphans/{1}/'.format(self.server_url, content_type)
+        logging.info('Getting orphan "{0}" content'.format(content_type))
         r_json = self._call_pulp(url)
         content = [content['image_id'] for content in r_json]
-        logging.info('Orphan "{0}" content:\n{1}'.format(content_type, content))
-        if 'error_message' in r_json:
-            raise Exception('Unable to list orphaned content type "{0}"'.format(content_type))
+        logging.info('Orphan "{0}" content: {1}'.format(content_type, content))
         return content
 
     def download_repo(self):
+        self.status()
+        self.verify_repo()
+        self._update_redirect_url()
+        self._export_repo()
+
         url = '{0}/pulp/docker/{1}.tar'.format(self.server_url, self.repo_id)
+        logging.info('Downloading exported repo "{0}"'.format(self.repo_id))
+        print 'Downloading exported repo "{0}"'.format(self.repo_id)
         r = self._call_pulp(url, 'get', return_json=False, p_stream=True)
         with open(self.exported_local_file, 'wb') as fd:
-            for chunk in r.iter_content(self._chunk_size):
+            for chunk in r.iter_content(self._CHUNK_SIZE):
                 fd.write(chunk)
         logging.info('Exported repo downloaded to "{0}"'.format(self.exported_local_file))
+        logging.info('Extracting downloaded repo "{0}"'.format(self.exported_local_file))
+        print 'Extracting downloaded repo "{0}"'.format(self.exported_local_file)
         with tarfile.open(self.exported_local_file) as tar:
             tar.extractall(self.data_dir)
         logging.info('Downloaded repo extracted to "{0}"'.format(self.data_dir))
+        print 'Downloaded repo extracted to "{0}"'.format(self.data_dir)
 
     def files_for_aws(self, redhat_images):
         """Return list of tuples of files from pulp to be uploaded to aws.
@@ -345,7 +389,8 @@ class PulpServer(object):
                 files.append((fname, os.path.join(dirpath, filename)))
                 logging.debug('File "{0}" queued for upload to AWS'.format(fname))
         if not files:
-            raise Exception('No files to upload to AWS')
+            logging.error('No files to upload to AWS')
+            raise PulpError('No files to upload to AWS')
         return files
 
     def cleanup(self):
@@ -462,7 +507,7 @@ class AwsS3(object):
 
     def status(self):
         logging.info('Checking AWS status')
-        self.verify_bucket()
+        self.bucket
         logging.info('AWS looks OK')
         print 'AWS status is OK'
 
@@ -503,7 +548,7 @@ class Openshift(object):
     """Interact with Openshift REST API"""
 
     def __init__(self, server_url, token, domain, app_name,
-                 app_git_url, cartridge, isv_app_name):
+                 app_git_url, cartridge, isv, isv_app_name):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
@@ -515,6 +560,7 @@ class Openshift(object):
         self._app_name = app_name
         self._app_git_url = app_git_url
         self._cartridge = cartridge
+        self._isv = isv
         self._isv_app_name = isv_app_name
 
     @property
@@ -552,7 +598,7 @@ class Openshift(object):
                     self._app_data = app
                     break
             else:
-                logging.error('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
+                logging.warn('Application "{0}" not found in domain "{1}"'.format(self.app_name, self.domain))
                 raise OpenshiftError('Openshift application "{0}" not found'.format(self.app_name))
         return self._app_data
 
@@ -574,7 +620,7 @@ class Openshift(object):
                 logging.error('ISV app name is required to get proper crane config file')
                 raise ConfigurationError('Missing ISV app name')
             self.clone_app()
-            filename = os.path.join(self.app_local_dir, 'crane', 'data', self.isv_app_name + '.json')
+            filename = os.path.join(self.app_local_dir, 'crane', 'data', '-'.join([self._isv, self.isv_app_name + '.json']))
             if not os.path.isfile(filename):
                 logging.warn('ISV app crane file "{0}" does not exist'.format(filename))
                 raise OpenshiftError('Missing ISV app crane file')
@@ -643,8 +689,8 @@ class Openshift(object):
 
     def clone_app(self):
         if not self._app_repo:
-            logging.info('Clonning Openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
-            print 'Clonning Openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
+            logging.info('Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
+            print 'Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
             self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
 
     def verify_domain(self):
@@ -689,6 +735,7 @@ class Openshift(object):
         try:
             self.verify_domain()
             logging.info('Openshift domain "{0}" already exists'.format(self.domain))
+            print 'Openshift domain "{0}" already exists'.format(self.domain)
         except OpenshiftError:
             url = 'broker/rest/domains'
             payload = {'name': self.domain}
@@ -697,15 +744,16 @@ class Openshift(object):
             if r_json['status'] != 'created':
                 logging.error('Domain "{0}" could not be created'.format(self.domain))
                 raise OpenshiftError('Domain "{0}" could not be created'.format(self.domain))
-            logging.info('Openshift domain "{0}" has been created'.format(self.domain))
-            print 'Openshift domain "{0}" has been created'.format(self.domain)
+            logging.info('Created openshift domain "{0}"'.format(self.domain))
+            print 'Created openshift domain "{0}"'.format(self.domain)
 
     def create_app(self, redhat_meta=None):
         """Create an openshift application"""
         try:
             self.verify_app()
             logging.info('Openshift app "{0}" already exists'.format(self.app_name))
-        except Exception:
+            print 'Openshift app "{0}" already exists'.format(self.app_name)
+        except OpenshiftError:
             payload = {'name'           : self.app_name,
                        'cartridge'      : self._cartridge,
                        'initial_git_url': self._app_git_url}
@@ -764,7 +812,7 @@ class ConfigurationError(Exception):
 class Configuration(object):
     """Configuration and utilities"""
 
-    _CONFIG_FILE_NAME = 'raas.cfg'
+    _CONFIG_FILE_NAME    = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
     def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
@@ -852,17 +900,22 @@ class Configuration(object):
     @isv_app_name.setter
     def isv_app_name(self, val):
         if val:
-            if val.count('/') != 1:
-                logging.error('ISV app name must contain exactly one "/": {0}'.format(val))
+            if val.count('/') > 1:
+                logging.error('ISV app name must contain no more than one "/": {0}'.format(val))
                 raise ValueError('Invalid ISV app name "{0}"'.format(val))
             val = val.lower()
-            repo, app = val.split('/')
-            if not 4 <= len(repo) <= 30:
-                logging.error('Namespace part of ISV app name must have between 4 and 30 characters: {0}'.format(repo))
-                raise ValueError('Invalid ISV app name "{0}"'.format(val))
-            if not re.match('^[a-z0-9_]+$', repo):
-                logging.error('Namespace part of ISV app name must contain only [a-z0-9_] characters: {0}'.format(repo))
-                raise ValueError('Invalid ISV app name "{0}"'.format(val))
+            if val.count('/') == 1:
+                repo, app = val.split('/')
+            else:
+                repo = None
+                app = val
+            if repo:
+                if not 4 <= len(repo) <= 30:
+                    logging.error('Namespace part of ISV app name must have between 4 and 30 characters: {0}'.format(repo))
+                    raise ValueError('Invalid ISV app name "{0}"'.format(val))
+                if not re.match('^[a-z0-9_]+$', repo):
+                    logging.error('Namespace part of ISV app name must contain only [a-z0-9_] characters: {0}'.format(repo))
+                    raise ValueError('Invalid ISV app name "{0}"'.format(val))
             if not re.match('^[a-z0-9-_.]+$', app):
                 logging.error('App name part of ISV app name must contain only [a-z0-9-_.] characters: {0}'.format(app))
                 raise ValueError('Invalid ISV app name "{0}"'.format(val))
@@ -962,6 +1015,7 @@ class Configuration(object):
                 'app_name'    : self._parsed_config.get(self.isv, 'openshift_app'),
                 'app_git_url' : self._parsed_config.get('openshift', 'app_git_url'),
                 'cartridge'   : self._parsed_config.get('openshift', 'cartridge'),
+                'isv'         : self.isv,
                 'isv_app_name': self._isv_app_name}
 
     @property
@@ -1012,12 +1066,17 @@ class Configuration(object):
             logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
 
 
+class RaasError(Exception):
+    pass
+
+
 def main():
     """Entrypoint for script"""
     isv_args = ['isv']
     isv_kwargs = {'metavar': 'ISV_NAME',
             'help': 'ISV name matching config file section'}
     isv_app_args = ['isv_app']
+    isv_app_opt_args = ['-a', '--isv_app']
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
             'help': 'ISV application name, for example: "some/app"'}
     parser = ArgumentParser(
@@ -1034,7 +1093,7 @@ def main():
     status_parser = subparsers.add_parser('status',
             help='check configuration status')
     status_parser.add_argument(*isv_args, **isv_kwargs)
-    status_parser.add_argument('-a', '--isv_app', **isv_app_kwargs)
+    status_parser.add_argument(*isv_app_opt_args, **isv_app_kwargs)
     status_parser.add_argument('-p', '--pulp', action='store_true',
             help='include checking the pulp server status')
     setup_parser = subparsers.add_parser('setup',
@@ -1053,7 +1112,7 @@ def main():
     pulp_upload_parser = subparsers.add_parser('pulp-upload',
             help='upload image to pulp')
     pulp_upload_parser.add_argument(*isv_args, **isv_kwargs)
-    pulp_upload_parser.add_argument(*isv_app_args, **isv_app_kwargs)
+    pulp_upload_parser.add_argument(*isv_app_opt_args, **isv_app_kwargs)
     pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar',
             help='file to upload to pulp server. Output of "docker save some/image > image.tar"')
     args = parser.parse_args()
@@ -1063,34 +1122,31 @@ def main():
     logger.setLevel(logging.DEBUG)
     consoleHandler = logging.StreamHandler()
     consoleHandler.setFormatter(logFormatter)
-    log_level = getattr(logging, args.log.upper(), None)
-    if not isinstance(log_level, int):
-        print 'Invalid value passed to the --log option. See help for possible values.'
-        sys.exit(1)
-    consoleHandler.setLevel(log_level)
+    consoleHandler.setLevel(getattr(logging, args.log.upper(), None))
     logger.addHandler(consoleHandler)
 
     try:
         config_kwargs = {}
         if hasattr(args, 'isv_app'):
-            if args.isv_app:
-                p = re.compile('^.+/.+$')
-                if p.match(args.isv_app):
-                    config_kwargs['isv_app_name'] = args.isv_app
-                else:
-                    raise Exception('Application name "{0}" must contain "/", for example "some/app"'.format(args.isv_app))
+            config_kwargs['isv_app_name'] = args.isv_app
         if hasattr(args, 'file_upload'):
             config_kwargs['file_upload'] = args.file_upload
-        config_kwargs['config_branch'] = args.configenv
         if hasattr(args, 'oodomain'):
             config_kwargs['oodomain'] = args.oodomain
         if hasattr(args, 'ooapp'):
             config_kwargs['ooapp'] = args.ooapp
         if hasattr(args, 's3bucket'):
             config_kwargs['s3bucket'] = args.s3bucket
+        config_kwargs['config_branch'] = args.configenv
         config = Configuration(args.isv, **config_kwargs)
-    except Exception as e:
+    except ConfigurationError as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))
+        sys.exit(1)
+    except ValueError as e:
+        logging.critical('Invalid value provided: {0}'.format(e))
+        sys.exit(1)
+    except IOError as e:
+        logging.critical('I/O error: {0}'.format(e))
         sys.exit(1)
 
     fileHandler = logging.FileHandler(config.logfile)
@@ -1100,19 +1156,19 @@ def main():
 
     try:
         openshift = Openshift(**config.openshift_conf)
-    except Exception as e:
+    except OpenshiftError as e:
         logging.critical('Failed to initialize Openshift: {0}'.format(e))
         sys.exit(1)
 
     try:
         aws = AwsS3(**config.aws_conf)
-    except Exception as e:
+    except AwsError as e:
         logging.critical('Failed to initialize AWS: {0}'.format(e))
         sys.exit(1)
 
     try:
         pulp = PulpServer(**config.pulp_conf)
-    except Exception as e:
+    except PulpError as e:
         logging.critical('Failed to initialize Pulp: {0}'.format(e))
         sys.exit(1)
 
@@ -1124,75 +1180,87 @@ def main():
 
     ret = 0
 
-    if args.action in 'status':
-        status = True
-        if args.pulp:
-            try:
+    if args.action == 'status':
+        try:
+            if args.pulp:
                 pulp.status()
                 pulp.remove_orphan_content()
-            except Exception as e:
-                logging.error('Failed to verify Pulp status: {0}'.format(e))
-                status = False
-        if not aws.status():
-            status = False
-        if not openshift.status():
-            status = False
-        if status and openshift.isv_app_name:
-            if openshift.image_ids == aws.image_ids:
-                print 'Openshift Crane images matches AWS images'
-            else:
-                logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
-                              .format(openshift.image_ids, aws.image_ids))
-                status = False
-        if status:
-            print 'Status of "{0}" should be OK'.format(config.isv)
-        else:
-            print 'Failed to verify status of "{0}"'.format(config.isv)
+                if config.isv_app_name:
+                    pulp.verify_repo()
+            aws.status()
+            openshift.status()
+            if config.isv_app_name:
+                if openshift.image_ids == aws.image_ids:
+                    logging.info('Openshift crane images matches AWS images')
+                    print 'Openshift crane images matches AWS images'
+                else:
+                    logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
+                            .format(openshift.image_ids, aws.image_ids))
+                    raise RaasError('Openshift crane images and AWS images do not match')
+            logging.info('Status of "{0}" is OK'.format(config.isv))
+            print 'Status of "{0}" is OK'.format(config.isv)
+        except RaasError as e:
+            logging.error('Failed to verify "{0}" status: {1}'.format(config.isv, e))
+            ret = 1
+        except AwsError as e:
+            logging.error('Failed to verify AWS status: {0}'.format(e))
+            ret = 1
+        except OpenshiftError as e:
+            logging.error('Failed to verify openshift status: {0}'.format(e))
+            ret = 1
+        except PulpError as e:
+            logging.error('Failed to verify pulp status: {0}'.format(e))
+            ret = 1
+        except IOError as e:
+            logging.error('I/O error: {0}'.format(e))
             ret = 1
 
-    elif args.action in 'setup':
+    elif args.action == 'setup':
         try:
             aws.create_bucket()
             openshift.create_domain()
             openshift.create_app(rhmeta.redhat_meta_files)
+            logging.info('ISV "{0}" was setup correctly'.format(config.isv))
             print 'ISV "{0}" was setup correctly'.format(config.isv)
-        except Exception as e:
-            logging.error('Failed to setup ISV: {0}'.format(e))
+        except AwsError as e:
+            logging.error('Failed to create S3 bucket: {0}'.format(e))
+            ret = 1
+        except OpenshiftError as e:
+            logging.error('Failed to setup openshift: {0}'.format(e))
+            ret = 1
+        except IOError as e:
+            logging.error('I/O error: {0}'.format(e))
             ret = 1
 
-    elif args.action in 'publish':
+    elif args.action == 'publish':
         try:
-            pulp.status()
-            pulp.verify_repo()
-            pulp.update_redirect_url()
-            pulp.export_repo()
             pulp.download_repo()
             aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
             openshift.update_app([pulp.crane_config_file])
-        except Exception as e:
-            logging.error('Failed to publish image from Pulp: {0}'.format(e))
+            logging.info('Published "{0}" image'.format(config.isv_app_name))
+            print 'Published "{0}" image'.format(config.isv_app_name)
+        except PulpError as e:
+            logging.error('Failed to download repo from pulp: {0}'.format(e))
+            ret = 1
+        except AwsError as e:
+            logging.error('Failed to upload images to AWS: {0}'.format(e))
+            ret = 1
+        except OpenshiftError as e:
+            logging.error('Failed to update openshift app: {0}'.format(e))
+            ret = 1
+        except IOError as e:
+            logging.error('I/O error: {0}'.format(e))
             ret = 1
 
-    elif args.action in 'pulp-upload':
-        try:
-            pulp.status()
-        except Exception as e:
-            logging.error('Failed to initialize Pulp: {0}'.format(e))
-            sys.exit(1)
-        if not pulp.is_repo():
-            try:
-                pulp.create_repo()
-            except Exception as e:
-                logging.error('Failed to create Pulp repository: {0}'.format(e))
-                sys.exit(1)
-        else:
-            logging.info('Pulp repository "{0}" already exists'.format(pulp.repo_id))
+    elif args.action == 'pulp-upload':
         try:
             pulp.upload_image(config.file_upload)
-            print 'Uploaded image to pulp repo "{0}"'.format(pulp.repo_id)
-        except Exception as e:
-            logging.error('Failed to upload image to Pulp: {0}'.format(e))
-            sys.exit(1)
+        except PulpError as e:
+            logging.error('Failed to upload image to pulp: {0}'.format(e))
+            ret = 1
+        except IOError as e:
+            logging.error('I/O error: {0}'.format(e))
+            ret = 1
 
     if not args.nocommit:
         config.commit_all_changes()

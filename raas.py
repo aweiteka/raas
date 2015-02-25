@@ -730,7 +730,8 @@ class Openshift(object):
             raise OpenshiftError('Failed to ping openshift crane app')
         logging.debug('Openshift crane app response: {0}'.format(r.text))
         if r.text != 'true':
-            logging.warn('Openshift crane ping response is not "true" but: {0}'.format(r.text))
+            logging.warn('Openshift crane ping response is not "true"')
+            logging.debug('Openshift crane ping response is not "true" but: {0}'.format(r.text))
             raise OpenshiftError('Failed to ping openshift crane app')
         logging.info('Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url']))
         print 'Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url'])

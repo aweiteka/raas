@@ -17,6 +17,7 @@ from datetime import date
 from git import Repo
 from git.exc import InvalidGitRepositoryError
 from glob import glob
+from simplejson.scanner import JSONDecodeError
 from tempfile import mkdtemp
 from time import sleep
 
@@ -124,7 +125,11 @@ class PulpServer(object):
             raise PulpError('Received invalid status code: {0}'.format(r.status_code))
 
         if return_json:
-            r_json = r.json()
+            try:
+                r_json = r.json()
+            except JSONDecodeError as e:
+                logging.error('Failed to parse pulp response: {0}'.format(e))
+                raise PulpError('Failed to parse pulp response: {0}'.format(e))
             # some requests return null
             if not r_json:
                 return r_json
@@ -656,11 +661,12 @@ class Openshift(object):
             raise ValueError('Invalid value of "req_type" parameter')
 
         logging.debug('Openshift HTTP status code: {0}'.format(r.status_code))
-        if r.status_code >= 500:
-            logging.error('Received invalid status code from openshift: {0}'.format(r.status_code))
-            raise OpenshiftError('Received invalid status code: {0}'.format(r.status_code))
 
-        r_json = r.json()
+        try:
+            r_json = r.json()
+        except JSONDecodeError as e:
+            logging.error('Failed to parse openshift response: {0}'.format(e))
+            raise OpenshiftError('Failed to parse openshift response: {0}'.format(e))
         logging.debug('Openshift JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
         if r_json['messages']:
@@ -668,6 +674,10 @@ class Openshift(object):
             for m in r_json['messages']:
                 msgs += '\n - ' + m['text']
             logging.info('Messages from Openshift response:{0}'.format(msgs))
+
+        if r.status_code >= 500:
+            logging.error('Received invalid status code from openshift: {0}'.format(r.status_code))
+            raise OpenshiftError('Received invalid status code: {0}'.format(r.status_code))
 
         return r_json
 

@@ -547,8 +547,8 @@ class OpenshiftError(Exception):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, token, domain, app_name,
-                 app_git_url, cartridge, isv, isv_app_name):
+    def __init__(self, server_url, token, domain, app_name, app_git_url,
+            app_git_branch, cartridge, isv, isv_app_name):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
@@ -559,6 +559,7 @@ class Openshift(object):
         self._domain = domain
         self._app_name = app_name
         self._app_git_url = app_git_url
+        self._app_git_branch = app_git_branch
         self._cartridge = cartridge
         self._isv = isv
         self._isv_app_name = isv_app_name
@@ -646,6 +647,10 @@ class Openshift(object):
             logging.info('Posting to openshift URL "{0}"'.format(url))
             logging.debug('Posting data: {0}'.format(payload))
             r = requests.post(url, headers=headers, data=payload)
+        elif req_type == 'put':
+            logging.info('Putting to openshift URL "{0}"'.format(url))
+            logging.debug('Putting data: {0}'.format(payload))
+            r = requests.put(url, headers=headers, data=payload)
         else:
             logging.error('Invalid value of "req_type" parameter: {0}'.format(req_type))
             raise ValueError('Invalid value of "req_type" parameter')
@@ -691,7 +696,8 @@ class Openshift(object):
         if not self._app_repo:
             logging.info('Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
             print 'Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
-            self._app_repo = Repo.clone_from(self.app_data['git_url'], self.app_local_dir)
+            self._app_repo = Repo.clone_from(self.app_data['git_url'],
+                    self.app_local_dir, branch=self._app_git_branch)
 
     def verify_domain(self):
         """Verify that Openshift domain exists"""
@@ -766,12 +772,25 @@ class Openshift(object):
                 raise OpenshiftError('Failed to create openshift app "{0}"'.format(self.app_name))
             self._app_data = r_json['data']
             self._set_env_vars()
-            self._restart_app()
-            sleep(5)
+
+            payload = {'deployment_branch': self._app_git_branch}
+            logging.info('Updating openshift application "{0}"'.format(self.app_name))
+            r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
+            if r_json['status'] != 'ok':
+                logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
+                raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
+            self._app_data = r_json['data']
+
             if redhat_meta:
                 self.update_app(redhat_meta)
             else:
+                logging.info('Deploying openshift application "{0}"'.format(self.app_name))
+                r_json = self._call_openshift(self.app_data['links']['DEPLOY']['href'], 'post', {})
+                if r_json['status'] != 'created':
+                    logging.error('Failed to deploy openshift app "{0}"'.format(self.app_name))
+                    raise OpenshiftError('Failed to deploy openshift app "{0}"'.format(self.app_name))
                 self.verify_app()
+
             logging.info('Created openshift app "{0}" with ID "{1}"'\
                          .format(self.app_data['app_url'], self.app_data['id']))
             print 'Created openshift application "{0}"'.format(self.app_name)
@@ -793,7 +812,6 @@ class Openshift(object):
         self._app_repo.index.add(files_to_add)
         self._app_repo.index.commit('Updated crane configuration')
         self._app_repo.remotes.origin.push()
-        sleep(5)
         self.verify_app()
         logging.info('Openshift crane app "{0}" has been updated'.format(self.app_name))
         print 'Openshift crane app "{0}" has been updated'.format(self.app_name)
@@ -816,7 +834,7 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
     def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
-                 oodomain=None, ooapp=None, s3bucket=None):
+            oodomain=None, ooapp=None, s3bucket=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -1009,14 +1027,15 @@ class Configuration(object):
 
     @property
     def openshift_conf(self):
-        return {'server_url'  : self._parsed_config.get('openshift', 'server_url'),
-                'token'       : self._parsed_config.get('openshift', 'token'),
-                'domain'      : self._parsed_config.get(self.isv, 'openshift_domain'),
-                'app_name'    : self._parsed_config.get(self.isv, 'openshift_app'),
-                'app_git_url' : self._parsed_config.get('openshift', 'app_git_url'),
-                'cartridge'   : self._parsed_config.get('openshift', 'cartridge'),
-                'isv'         : self.isv,
-                'isv_app_name': self._isv_app_name}
+        return {'server_url'    : self._parsed_config.get('openshift', 'server_url'),
+                'token'         : self._parsed_config.get('openshift', 'token'),
+                'domain'        : self._parsed_config.get(self.isv, 'openshift_domain'),
+                'app_name'      : self._parsed_config.get(self.isv, 'openshift_app'),
+                'app_git_url'   : self._parsed_config.get('openshift', 'app_git_url'),
+                'app_git_branch': self._parsed_config.get('openshift', 'app_git_branch'),
+                'cartridge'     : self._parsed_config.get('openshift', 'cartridge'),
+                'isv'           : self.isv,
+                'isv_app_name'  : self._isv_app_name}
 
     @property
     def aws_conf(self):

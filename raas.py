@@ -93,7 +93,6 @@ class PulpServer(object):
         if not self._upload_id:
             logging.info('Getting pulp upload ID')
             url = '{0}/pulp/api/v2/content/uploads/'.format(self.server_url)
-            # TODO: shouldn't this call be 'get' instead of 'post'?
             r_json = self._call_pulp(url, 'post')
             self._upload_id = r_json['upload_id']
             logging.info('Received pulp upload ID: {0}'.format(self._upload_id))

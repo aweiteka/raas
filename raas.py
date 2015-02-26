@@ -200,13 +200,13 @@ class PulpServer(object):
                 'distributors': [{
                     'distributor_type_id': 'docker_distributor_web',
                     'distributor_id': self._WEB_DISTRIBUTOR,
-                    'config': {
+                    'distributor_config': {
                         'repo-registry-id': self._isv_app_name},
                     'auto_publish': 'true'},
                     {
                     'distributor_type_id': 'docker_distributor_export',
                     'distributor_id': self._EXPORT_DISTRIBUTOR,
-                    'config': {
+                    'distributor_config': {
                         'repo-registry-id': self._isv_app_name},
                     'docker_publish_directory': self._EXPORT_DIR,
                     'auto_publish': 'true'}

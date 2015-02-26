@@ -11,7 +11,7 @@ import tarfile
 
 from argparse import ArgumentParser
 from boto import connect_s3, s3
-from ConfigParser import ConfigParser
+from ConfigParser import SafeConfigParser
 from datetime import date
 from git import Repo
 from git.exc import InvalidGitRepositoryError
@@ -909,7 +909,7 @@ class Configuration(object):
         if not os.path.isfile(self._conf_file):
             logging.error('Config file "{0}" not found'.format(self._conf_file))
             raise ConfigurationError('Missing config file')
-        self._parsed_config = ConfigParser()
+        self._parsed_config = SafeConfigParser()
         self._parsed_config.read(self._conf_file)
         logging.info('Loaded config file "{0}"'.format(self._conf_file))
 
@@ -1147,7 +1147,7 @@ class Configuration(object):
             self._parsed_config.add_section(self.isv)
             self._parsed_config.set(self.isv, 'openshift_domain', self.oodomain)
             self._parsed_config.set(self.isv, 'openshift_app', self.ooapp)
-            self._parsed_config.set(self.isv, 'openshift_scale', self.ooscale)
+            self._parsed_config.set(self.isv, 'openshift_scale', str(self.ooscale))
             self._parsed_config.set(self.isv, 's3_bucket', self.s3bucket)
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)

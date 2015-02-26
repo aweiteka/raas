@@ -10,8 +10,7 @@ import sys
 import tarfile
 
 from argparse import ArgumentParser
-from boto import connect_s3
-from boto import s3
+from boto import connect_s3, s3
 from ConfigParser import ConfigParser
 from datetime import date
 from git import Repo
@@ -135,8 +134,8 @@ class PulpServer(object):
             logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
             if 'error_message' in r_json:
-                logging.error('Error messages from Pulp response: {0}'.format(r_json['error_message']))
-                raise PulpError('Received error messages from pulp')
+                logging.warn('Error messages from Pulp response: {0}'.format(r_json['error_message']))
+                raise PulpError('Received error messages from pulp: {0}'.format(r_json['error_message']))
 
             if 'spawned_tasks' in r_json:
                 for task in r_json['spawned_tasks']:
@@ -243,13 +242,20 @@ class PulpServer(object):
         else:
             logging.info('Pulp upload ID is not set')
 
-    def _get_app_name_from_image(self, file_upload):
-        logging.info('Getting app name from the image "{0}"'.format(file_upload))
-        print 'Getting app name from the image "{0}"'.format(file_upload)
+    def _extract_image(self, file_upload):
+        if os.path.isfile(os.path.join(self.data_dir, 'repositories')):
+            logging.info('Image is already extracted in "{0}"'.format(self.data_dir))
+            return
         logging.info('Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir))
         print 'Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir)
         with tarfile.open(file_upload) as tar:
             tar.extractall(self.data_dir)
+        logging.info('Image "{0}" extracted to "{1}"'.format(file_upload, self.data_dir))
+
+    def _get_app_name_from_image(self, file_upload):
+        logging.info('Getting app name from the image "{0}"'.format(file_upload))
+        print 'Getting app name from the image "{0}"'.format(file_upload)
+        self._extract_image(file_upload)
         with open(os.path.join(self.data_dir, 'repositories')) as f:
             data = json.load(f)
             self._isv_app_name = data.keys()[0]
@@ -261,7 +267,54 @@ class PulpServer(object):
         print 'Got "{0}" as app name from the image "{1}"'.format(
                 self._isv_app_name, file_upload)
 
-    def upload_image(self, file_upload):
+    def _get_hierarchy_from_image(self, file_upload):
+        logging.info('Getting layers hierarchy from image "{0}"'.format(file_upload))
+        hierarchy = []
+        self._extract_image(file_upload)
+        glob_path = os.path.join(self.data_dir, '*', 'json')
+        logging.info('Checking image metadata files: {0}'.format(glob_path))
+        files = glob(glob_path)
+        logging.debug('Image metadata files: {0}'.format(files))
+        if not files:
+            logging.error('Missing json metadata files in docker image "{0}"'.format(file_upload))
+            raise PulpError('Missing json metadata files in docker image')
+        for fl in files:
+            logging.debug('Inspecting file "{0}"'.format(fl))
+            with open(fl) as f:
+                data = json.load(f)
+            logging.debug('Content of file "{0}":\n{1}'.format(fl,
+                    json.dumps(data, indent=2)))
+            image_id = data['id']
+            logging.debug('Image ID is "{0}"'.format(image_id))
+            if not 'parent' in data:
+                if not image_id in hierarchy:
+                    hierarchy.append(image_id)
+                    logging.debug('Parent ID is missing, adding image ID at the end')
+                else:
+                    logging.debug('Parent ID is missing and image ID is already in the hierarchy')
+                continue
+            parent = data['parent']
+            logging.debug('Parent image ID is "{0}"'.format(parent))
+            if not image_id in hierarchy and not parent in hierarchy:
+                logging.debug('Adding both parent ID and image ID at the beginning of hierarchy')
+                hierarchy.insert(0, parent)
+                hierarchy.insert(0, image_id)
+            elif image_id not in hierarchy:
+                logging.debug('Parent ID is in the hierarchy, adding image ID before parent')
+                hierarchy.insert(hierarchy.index(parent), image_id)
+            elif parent not in hierarchy:
+                logging.debug('Image ID is in the hierarchy, adding parent after image ID')
+                index = hierarchy.index(image_id)
+                if index == len(hierarchy) - 1:
+                    hierarchy.append(parent)
+                else:
+                    hierarchy.insert(index + 1, parent)
+            logging.debug('Current state of hierarchy: {0}'.format(hierarchy))
+        logging.info('Got layers hierarchy from image "{0}"'.format(file_upload))
+        logging.debug('Final layers hierarchy in image: {0}'.format(hierarchy))
+        return hierarchy
+
+    def upload_image(self, file_upload, redhat_image_ids):
         """Upload image to pulp repository"""
         if not os.path.isfile(file_upload):
             logging.error('Cannot find file to upload to pulp "{0}"'.format(file_upload))
@@ -269,9 +322,17 @@ class PulpServer(object):
         self.status()
         if not self._isv_app_name:
             self._get_app_name_from_image(file_upload)
+        mask_id = None
+        for i in self._get_hierarchy_from_image(file_upload):
+            if i in redhat_image_ids:
+                mask_id = i
+                logging.info('Masking Red Hat image ID "{0}" in pulp upload'.format(mask_id))
+                break
+        else:
+            logging.info('Not masking any Red Hat image ID in pulp upload')
         self._create_repo()
         self._upload_bits(file_upload)
-        self._import_upload()
+        self._import_upload(mask_id)
         self._delete_upload_id()
         self._publish_repo()
         logging.info('Image "{0}" uploaded to pulp repo "{1}"'.format(
@@ -297,17 +358,19 @@ class PulpServer(object):
         logging.info('File "{0}" uploaded to pulp'.format(file_upload))
         print 'File "{0}" uploaded to pulp'.format(file_upload)
 
-    def _import_upload(self):
+    def _import_upload(self, mask_id=None):
         """Import uploaded content"""
         logging.info('Importing pulp upload {0} into {1}'.format(self.upload_id, self.repo_id))
         url = '{0}/pulp/api/v2/repositories/{1}/actions/import_upload/'.format(self.server_url, self.repo_id)
         payload = {
-            'upload_id': self.upload_id,
             'unit_type_id': self._UNIT_TYPE_ID,
-            'unit_key': None,
-            'unit_metadata': None,
-            'override_config': None
+            'upload_id': self.upload_id,
+            'unit_key': {},
+            'unit_metadata': {},
+            'override_config': {},
         }
+        if mask_id:
+            payload['override_config']['mask_id'] = mask_id
         self._call_pulp(url, 'post', payload)
         logging.info('Imported pulp upload {0} into {1}'.format(self.upload_id, self.repo_id))
 
@@ -1280,7 +1343,7 @@ def main():
 
     elif args.action == 'pulp-upload':
         try:
-            pulp.upload_image(config.file_upload)
+            pulp.upload_image(config.file_upload, config.redhat_image_ids)
         except PulpError as e:
             logging.error('Failed to upload image to pulp: {0}'.format(e))
             ret = 1

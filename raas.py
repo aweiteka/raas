@@ -258,7 +258,7 @@ class PulpServer(object):
         self._extract_image(file_upload)
         with open(os.path.join(self.data_dir, 'repositories')) as f:
             data = json.load(f)
-            self._isv_app_name = data.keys()[0]
+        self._isv_app_name = data.keys()[0]
         if not self._isv_app_name:
             logging.error('Missing app name in the "repositories" file')
             raise PulpError('Missing app name in the "repositories" file')
@@ -542,14 +542,14 @@ class AwsS3(object):
             logging.error('ISV app name is required for S3 image upload')
             raise ConfigurationError('Missing ISV app name')
         for name, path in files:
+            dest = '/'.join([self._app_name, name])
+            key = s3.key.Key(bucket=self.bucket, name=dest)
+            logging.debug('Uploading "{0}"'.format(dest))
+            print 'Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name)
             with open(path, 'rb') as f:
-                dest = '/'.join([self._app_name, name])
-                key = s3.key.Key(bucket=self.bucket, name=dest)
-                logging.debug('Uploading "{0}"'.format(dest))
-                print 'Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name)
                 key.set_contents_from_file(f, replace=True)
-                key.set_acl('public-read')
-                logging.debug('Uploaded "{0}"'.format(dest))
+            key.set_acl('public-read')
+            logging.debug('Uploaded "{0}"'.format(dest))
         logging.info('All files uploaded to S3 bucket "{0}"'.format(self.bucket_name))
 
 
@@ -1112,10 +1112,10 @@ class Configuration(object):
                 logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
                 with open(filename) as f:
                     data = json.load(f)
-                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(
-                            filename, json.dumps(data, indent=2)))
-                    for i in data['images']:
-                        self._redhat_image_ids.add(i['id'])
+                logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(
+                        filename, json.dumps(data, indent=2)))
+                for i in data['images']:
+                    self._redhat_image_ids.add(i['id'])
             logging.debug('Red Hat image IDs: {0}'.format(self._redhat_image_ids))
         return self._redhat_image_ids
 

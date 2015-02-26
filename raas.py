@@ -404,60 +404,6 @@ class PulpServer(object):
             self._data_dir = None
 
 
-class RedHatMeta(object):
-    """Information on Red Hat docker images"""
-
-    def __init__(self, git_repo_url, relpath):
-        self._data_dir = None
-        self._repo = None
-        self._image_ids = set()
-        self._repo_url = git_repo_url
-        self._relpath = relpath
-
-    @property
-    def data_dir(self):
-        if not self._data_dir:
-            self._data_dir = mkdtemp()
-            logging.info('Created Red Hat meta data dir "{0}"'.format(self._data_dir))
-        return self._data_dir
-
-    @property
-    def redhat_meta_files(self):
-        self._clone_repo()
-        glob_path = os.path.join(self.data_dir, self._relpath) + os.sep + '*.json'
-        logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
-        rhmeta_files = glob(glob_path)
-#         if not rhmeta_files:
-#             raise Exception('No Red Hat meta files found')
-        logging.debug('Found Red Hat meta files: {0}'.format(rhmeta_files))
-        return rhmeta_files
-
-    @property
-    def image_ids(self):
-        if not self._image_ids:
-            for filename in self.redhat_meta_files:
-                logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
-                with open(filename) as f:
-                    data = json.load(f)
-                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(filename, json.dumps(data, indent=2)))
-                    for i in data['images']:
-                        self._image_ids.add(i['id'])
-            logging.debug('Red Hat image IDs: {0}'.format(self._image_ids))
-        return self._image_ids
-
-    def _clone_repo(self):
-        if not self._repo:
-            self._repo = Repo.clone_from(self._repo_url, self.data_dir)
-            logging.info('Red Hat meta git cloned to "{0}"'.format(self.data_dir))
-
-    def cleanup(self):
-        if self._data_dir:
-            logging.info('Removing Red Hat meta data dir "{0}"'.format(self._data_dir))
-            shutil.rmtree(self._data_dir)
-            self._data_dir = None
-            self._repo = None
-
-
 class AwsError(Exception):
     pass
 
@@ -701,6 +647,7 @@ class Openshift(object):
         if r_json['status'] != 'ok':
             logging.error('Failed to restart openshift app "{0}"'.format(self.app_name))
             raise OpenshiftError('Failed to restart Openshift app')
+        logging.info('Restarted openshift application "{0}"'.format(self.app_name))
 
     def clone_app(self):
         if not self._app_repo:
@@ -777,7 +724,12 @@ class Openshift(object):
                        'scale'          : self._app_scale}
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Creating openshift application "{0}"'.format(self.app_name))
-            print 'Creating openshift application "{0}"'.format(self.app_name)
+            if self._app_scale:
+                scalable = 'scalable '
+            else:
+                scalable = ''
+            print 'Creating {0}openshift application "{1}" (this can take several minutes..)'.format(
+                    scalable, self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
             if r_json['status'] != 'created':
                 logging.error('Failed to create openshift app "{0}"'.format(self.app_name))
@@ -785,22 +737,26 @@ class Openshift(object):
             self._app_data = r_json['data']
             self._set_env_vars()
 
-            payload = {'deployment_branch': self._app_git_branch}
-            logging.info('Updating openshift application "{0}"'.format(self.app_name))
-            r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
-            if r_json['status'] != 'ok':
-                logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
-                raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
-            self._app_data = r_json['data']
+            if self._app_git_branch != 'master':
+                payload = {'deployment_branch': self._app_git_branch}
+                logging.info('Updating openshift application "{0}"'.format(self.app_name))
+                r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
+                if r_json['status'] != 'ok':
+                    logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
+                    raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
+                self._app_data = r_json['data']
 
             if redhat_meta:
                 self.update_app(redhat_meta)
-            else:
+            elif self._app_git_branch != 'master':
                 logging.info('Deploying openshift application "{0}"'.format(self.app_name))
                 r_json = self._call_openshift(self.app_data['links']['DEPLOY']['href'], 'post', {})
                 if r_json['status'] != 'created':
                     logging.error('Failed to deploy openshift app "{0}"'.format(self.app_name))
                     raise OpenshiftError('Failed to deploy openshift app "{0}"'.format(self.app_name))
+                self.verify_app()
+            else:
+                self._restart_app()
                 self.verify_app()
 
             logging.info('Created openshift app "{0}" with ID "{1}"'\
@@ -813,8 +769,7 @@ class Openshift(object):
         if not data_files:
             logging.info('No configuration data supplied')
             return
-        print 'Updating openshift crane app "{0}"'.format(self.app_name)
-        self.verify_app()
+        print 'Updating openshift crane application "{0}"'.format(self.app_name)
         self.clone_app()
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
         files_to_add = []
@@ -826,7 +781,7 @@ class Openshift(object):
         self._app_repo.remotes.origin.push()
         self.verify_app()
         logging.info('Openshift crane app "{0}" has been updated'.format(self.app_name))
-        print 'Openshift crane app "{0}" has been updated'.format(self.app_name)
+        print 'Updated openshift crane application "{0}"'.format(self.app_name)
 
     def cleanup(self):
         if self._app_local_dir:
@@ -853,6 +808,7 @@ class Configuration(object):
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
         self._pulp_repo = None
+        self._redhat_image_ids = set()
         self.config_branch = config_branch
         self.isv = isv
         self.isv_app_name = isv_app_name
@@ -1075,6 +1031,31 @@ class Configuration(object):
         return {'git_repo_url': self._parsed_config.get('redhat', 'metadata_repo'),
                 'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
+    @property
+    def redhat_meta_files(self):
+        glob_path = os.path.join(self._conf_dir, 'redhat', 'metadata') + os.sep + '*.json'
+        logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
+        rhmeta_files = glob(glob_path)
+        if not rhmeta_files:
+            logging.error('No Red Hat meta files found')
+            raise ConfigurationError('No Red Hat meta files found')
+        logging.debug('Found Red Hat meta files: {0}'.format(rhmeta_files))
+        return rhmeta_files
+
+    @property
+    def redhat_image_ids(self):
+        if not self._redhat_image_ids:
+            for filename in self.redhat_meta_files:
+                logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
+                with open(filename) as f:
+                    data = json.load(f)
+                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(
+                            filename, json.dumps(data, indent=2)))
+                    for i in data['images']:
+                        self._redhat_image_ids.add(i['id'])
+            logging.debug('Red Hat image IDs: {0}'.format(self._redhat_image_ids))
+        return self._redhat_image_ids
+
     def commit_all_changes(self):
         if self._config_repo:
             logging.info('Committing changes in config repo')
@@ -1223,12 +1204,6 @@ def main():
         logging.critical('Failed to initialize Pulp: {0}'.format(e))
         sys.exit(1)
 
-    try:
-        rhmeta = RedHatMeta(**config.redhat_meta_conf)
-    except Exception as e:
-        logging.critical('Failed to initialize Red Hat Meta class: {0}'.format(e))
-        sys.exit(1)
-
     ret = 0
 
     if args.action == 'status':
@@ -1270,7 +1245,7 @@ def main():
         try:
             aws.create_bucket()
             openshift.create_domain()
-            openshift.create_app(rhmeta.redhat_meta_files)
+            openshift.create_app(config.redhat_meta_files)
             logging.info('ISV "{0}" was setup correctly'.format(config.isv))
             print 'ISV "{0}" was setup correctly'.format(config.isv)
         except AwsError as e:
@@ -1286,7 +1261,7 @@ def main():
     elif args.action == 'publish':
         try:
             pulp.download_repo()
-            aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
+            aws.upload_layers(pulp.files_for_aws(config.redhat_image_ids))
             openshift.update_app([pulp.crane_config_file])
             logging.info('Published "{0}" image'.format(config.isv_app_name))
             print 'Published "{0}" image'.format(config.isv_app_name)
@@ -1318,7 +1293,6 @@ def main():
 
     openshift.cleanup()
     pulp.cleanup()
-    rhmeta.cleanup()
 
     sys.exit(ret)
 

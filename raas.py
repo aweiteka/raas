@@ -207,8 +207,7 @@ class PulpServer(object):
                     'distributor_id': self._EXPORT_DISTRIBUTOR,
                     'distributor_config': {
                         'repo-registry-id': self._isv_app_name},
-                    'docker_publish_directory': self._EXPORT_DIR,
-                    'auto_publish': 'true'}
+                    'auto_publish': 'false'}
                     ]
             }
             url = '{0}/pulp/api/v2/repositories/'.format(self.server_url)
@@ -394,7 +393,7 @@ class PulpServer(object):
         payload = {
             'id': self._EXPORT_DISTRIBUTOR,
             'override_config': {
-                'export_file': '{0}{1}.tar'.format(self._EXPORT_DIR, self.repo_id),
+                'export_file': '{0}{1}.tar'.format(self._EXPORT_DIR, self.repo_id)
             }
         }
         logging.info('Exporting pulp repository "{0}"'.format(self.repo_id))

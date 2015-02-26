@@ -10,8 +10,7 @@ import sys
 import tarfile
 
 from argparse import ArgumentParser
-from boto import connect_s3
-from boto import s3
+from boto import connect_s3, s3
 from ConfigParser import ConfigParser
 from datetime import date
 from git import Repo
@@ -135,8 +134,8 @@ class PulpServer(object):
             logging.debug('Pulp JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
             if 'error_message' in r_json:
-                logging.error('Error messages from Pulp response: {0}'.format(r_json['error_message']))
-                raise PulpError('Received error messages from pulp')
+                logging.warn('Error messages from Pulp response: {0}'.format(r_json['error_message']))
+                raise PulpError('Received error messages from pulp: {0}'.format(r_json['error_message']))
 
             if 'spawned_tasks' in r_json:
                 for task in r_json['spawned_tasks']:
@@ -243,13 +242,20 @@ class PulpServer(object):
         else:
             logging.info('Pulp upload ID is not set')
 
-    def _get_app_name_from_image(self, file_upload):
-        logging.info('Getting app name from the image "{0}"'.format(file_upload))
-        print 'Getting app name from the image "{0}"'.format(file_upload)
+    def _extract_image(self, file_upload):
+        if os.path.isfile(os.path.join(self.data_dir, 'repositories')):
+            logging.info('Image is already extracted in "{0}"'.format(self.data_dir))
+            return
         logging.info('Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir))
         print 'Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir)
         with tarfile.open(file_upload) as tar:
             tar.extractall(self.data_dir)
+        logging.info('Image "{0}" extracted to "{1}"'.format(file_upload, self.data_dir))
+
+    def _get_app_name_from_image(self, file_upload):
+        logging.info('Getting app name from the image "{0}"'.format(file_upload))
+        print 'Getting app name from the image "{0}"'.format(file_upload)
+        self._extract_image(file_upload)
         with open(os.path.join(self.data_dir, 'repositories')) as f:
             data = json.load(f)
             self._isv_app_name = data.keys()[0]
@@ -261,7 +267,54 @@ class PulpServer(object):
         print 'Got "{0}" as app name from the image "{1}"'.format(
                 self._isv_app_name, file_upload)
 
-    def upload_image(self, file_upload):
+    def _get_hierarchy_from_image(self, file_upload):
+        logging.info('Getting layers hierarchy from image "{0}"'.format(file_upload))
+        hierarchy = []
+        self._extract_image(file_upload)
+        glob_path = os.path.join(self.data_dir, '*', 'json')
+        logging.info('Checking image metadata files: {0}'.format(glob_path))
+        files = glob(glob_path)
+        logging.debug('Image metadata files: {0}'.format(files))
+        if not files:
+            logging.error('Missing json metadata files in docker image "{0}"'.format(file_upload))
+            raise PulpError('Missing json metadata files in docker image')
+        for fl in files:
+            logging.debug('Inspecting file "{0}"'.format(fl))
+            with open(fl) as f:
+                data = json.load(f)
+            logging.debug('Content of file "{0}":\n{1}'.format(fl,
+                    json.dumps(data, indent=2)))
+            image_id = data['id']
+            logging.debug('Image ID is "{0}"'.format(image_id))
+            if not 'parent' in data:
+                if not image_id in hierarchy:
+                    hierarchy.append(image_id)
+                    logging.debug('Parent ID is missing, adding image ID at the end')
+                else:
+                    logging.debug('Parent ID is missing and image ID is already in the hierarchy')
+                continue
+            parent = data['parent']
+            logging.debug('Parent image ID is "{0}"'.format(parent))
+            if not image_id in hierarchy and not parent in hierarchy:
+                logging.debug('Adding both parent ID and image ID at the beginning of hierarchy')
+                hierarchy.insert(0, parent)
+                hierarchy.insert(0, image_id)
+            elif image_id not in hierarchy:
+                logging.debug('Parent ID is in the hierarchy, adding image ID before parent')
+                hierarchy.insert(hierarchy.index(parent), image_id)
+            elif parent not in hierarchy:
+                logging.debug('Image ID is in the hierarchy, adding parent after image ID')
+                index = hierarchy.index(image_id)
+                if index == len(hierarchy) - 1:
+                    hierarchy.append(parent)
+                else:
+                    hierarchy.insert(index + 1, parent)
+            logging.debug('Current state of hierarchy: {0}'.format(hierarchy))
+        logging.info('Got layers hierarchy from image "{0}"'.format(file_upload))
+        logging.debug('Final layers hierarchy in image: {0}'.format(hierarchy))
+        return hierarchy
+
+    def upload_image(self, file_upload, redhat_image_ids):
         """Upload image to pulp repository"""
         if not os.path.isfile(file_upload):
             logging.error('Cannot find file to upload to pulp "{0}"'.format(file_upload))
@@ -269,9 +322,17 @@ class PulpServer(object):
         self.status()
         if not self._isv_app_name:
             self._get_app_name_from_image(file_upload)
+        mask_id = None
+        for i in self._get_hierarchy_from_image(file_upload):
+            if i in redhat_image_ids:
+                mask_id = i
+                logging.info('Masking Red Hat image ID "{0}" in pulp upload'.format(mask_id))
+                break
+        else:
+            logging.info('Not masking any Red Hat image ID in pulp upload')
         self._create_repo()
         self._upload_bits(file_upload)
-        self._import_upload()
+        self._import_upload(mask_id)
         self._delete_upload_id()
         self._publish_repo()
         logging.info('Image "{0}" uploaded to pulp repo "{1}"'.format(
@@ -297,17 +358,19 @@ class PulpServer(object):
         logging.info('File "{0}" uploaded to pulp'.format(file_upload))
         print 'File "{0}" uploaded to pulp'.format(file_upload)
 
-    def _import_upload(self):
+    def _import_upload(self, mask_id=None):
         """Import uploaded content"""
         logging.info('Importing pulp upload {0} into {1}'.format(self.upload_id, self.repo_id))
         url = '{0}/pulp/api/v2/repositories/{1}/actions/import_upload/'.format(self.server_url, self.repo_id)
         payload = {
-            'upload_id': self.upload_id,
             'unit_type_id': self._UNIT_TYPE_ID,
-            'unit_key': None,
-            'unit_metadata': None,
-            'override_config': None
+            'upload_id': self.upload_id,
+            'unit_key': {},
+            'unit_metadata': {},
+            'override_config': {},
         }
+        if mask_id:
+            payload['override_config']['mask_id'] = mask_id
         self._call_pulp(url, 'post', payload)
         logging.info('Imported pulp upload {0} into {1}'.format(self.upload_id, self.repo_id))
 
@@ -402,60 +465,6 @@ class PulpServer(object):
             logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
             shutil.rmtree(self._data_dir)
             self._data_dir = None
-
-
-class RedHatMeta(object):
-    """Information on Red Hat docker images"""
-
-    def __init__(self, git_repo_url, relpath):
-        self._data_dir = None
-        self._repo = None
-        self._image_ids = set()
-        self._repo_url = git_repo_url
-        self._relpath = relpath
-
-    @property
-    def data_dir(self):
-        if not self._data_dir:
-            self._data_dir = mkdtemp()
-            logging.info('Created Red Hat meta data dir "{0}"'.format(self._data_dir))
-        return self._data_dir
-
-    @property
-    def redhat_meta_files(self):
-        self._clone_repo()
-        glob_path = os.path.join(self.data_dir, self._relpath) + os.sep + '*.json'
-        logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
-        rhmeta_files = glob(glob_path)
-#         if not rhmeta_files:
-#             raise Exception('No Red Hat meta files found')
-        logging.debug('Found Red Hat meta files: {0}'.format(rhmeta_files))
-        return rhmeta_files
-
-    @property
-    def image_ids(self):
-        if not self._image_ids:
-            for filename in self.redhat_meta_files:
-                logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
-                with open(filename) as f:
-                    data = json.load(f)
-                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(filename, json.dumps(data, indent=2)))
-                    for i in data['images']:
-                        self._image_ids.add(i['id'])
-            logging.debug('Red Hat image IDs: {0}'.format(self._image_ids))
-        return self._image_ids
-
-    def _clone_repo(self):
-        if not self._repo:
-            self._repo = Repo.clone_from(self._repo_url, self.data_dir)
-            logging.info('Red Hat meta git cloned to "{0}"'.format(self.data_dir))
-
-    def cleanup(self):
-        if self._data_dir:
-            logging.info('Removing Red Hat meta data dir "{0}"'.format(self._data_dir))
-            shutil.rmtree(self._data_dir)
-            self._data_dir = None
-            self._repo = None
 
 
 class AwsError(Exception):
@@ -701,6 +710,7 @@ class Openshift(object):
         if r_json['status'] != 'ok':
             logging.error('Failed to restart openshift app "{0}"'.format(self.app_name))
             raise OpenshiftError('Failed to restart Openshift app')
+        logging.info('Restarted openshift application "{0}"'.format(self.app_name))
 
     def clone_app(self):
         if not self._app_repo:
@@ -777,7 +787,12 @@ class Openshift(object):
                        'scale'          : self._app_scale}
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Creating openshift application "{0}"'.format(self.app_name))
-            print 'Creating openshift application "{0}"'.format(self.app_name)
+            if self._app_scale:
+                scalable = 'scalable '
+            else:
+                scalable = ''
+            print 'Creating {0}openshift application "{1}" (this can take several minutes..)'.format(
+                    scalable, self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
             if r_json['status'] != 'created':
                 logging.error('Failed to create openshift app "{0}"'.format(self.app_name))
@@ -785,22 +800,26 @@ class Openshift(object):
             self._app_data = r_json['data']
             self._set_env_vars()
 
-            payload = {'deployment_branch': self._app_git_branch}
-            logging.info('Updating openshift application "{0}"'.format(self.app_name))
-            r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
-            if r_json['status'] != 'ok':
-                logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
-                raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
-            self._app_data = r_json['data']
+            if self._app_git_branch != 'master':
+                payload = {'deployment_branch': self._app_git_branch}
+                logging.info('Updating openshift application "{0}"'.format(self.app_name))
+                r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
+                if r_json['status'] != 'ok':
+                    logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
+                    raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
+                self._app_data = r_json['data']
 
             if redhat_meta:
                 self.update_app(redhat_meta)
-            else:
+            elif self._app_git_branch != 'master':
                 logging.info('Deploying openshift application "{0}"'.format(self.app_name))
                 r_json = self._call_openshift(self.app_data['links']['DEPLOY']['href'], 'post', {})
                 if r_json['status'] != 'created':
                     logging.error('Failed to deploy openshift app "{0}"'.format(self.app_name))
                     raise OpenshiftError('Failed to deploy openshift app "{0}"'.format(self.app_name))
+                self.verify_app()
+            else:
+                self._restart_app()
                 self.verify_app()
 
             logging.info('Created openshift app "{0}" with ID "{1}"'\
@@ -813,8 +832,7 @@ class Openshift(object):
         if not data_files:
             logging.info('No configuration data supplied')
             return
-        print 'Updating openshift crane app "{0}"'.format(self.app_name)
-        self.verify_app()
+        print 'Updating openshift crane application "{0}"'.format(self.app_name)
         self.clone_app()
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
         files_to_add = []
@@ -826,7 +844,7 @@ class Openshift(object):
         self._app_repo.remotes.origin.push()
         self.verify_app()
         logging.info('Openshift crane app "{0}" has been updated'.format(self.app_name))
-        print 'Openshift crane app "{0}" has been updated'.format(self.app_name)
+        print 'Updated openshift crane application "{0}"'.format(self.app_name)
 
     def cleanup(self):
         if self._app_local_dir:
@@ -853,6 +871,7 @@ class Configuration(object):
         otherwise clone repo based on RAAS_CONF_REPO env var.
         """
         self._pulp_repo = None
+        self._redhat_image_ids = set()
         self.config_branch = config_branch
         self.isv = isv
         self.isv_app_name = isv_app_name
@@ -1075,6 +1094,31 @@ class Configuration(object):
         return {'git_repo_url': self._parsed_config.get('redhat', 'metadata_repo'),
                 'relpath'     : self._parsed_config.get('redhat', 'metadata_relpath')}
 
+    @property
+    def redhat_meta_files(self):
+        glob_path = os.path.join(self._conf_dir, 'redhat', 'metadata') + os.sep + '*.json'
+        logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
+        rhmeta_files = glob(glob_path)
+        if not rhmeta_files:
+            logging.error('No Red Hat meta files found')
+            raise ConfigurationError('No Red Hat meta files found')
+        logging.debug('Found Red Hat meta files: {0}'.format(rhmeta_files))
+        return rhmeta_files
+
+    @property
+    def redhat_image_ids(self):
+        if not self._redhat_image_ids:
+            for filename in self.redhat_meta_files:
+                logging.debug('Reading Red Hat meta file "{0}"'.format(filename))
+                with open(filename) as f:
+                    data = json.load(f)
+                    logging.debug('Red Hat meta file "{0}" data:\n{1}'.format(
+                            filename, json.dumps(data, indent=2)))
+                    for i in data['images']:
+                        self._redhat_image_ids.add(i['id'])
+            logging.debug('Red Hat image IDs: {0}'.format(self._redhat_image_ids))
+        return self._redhat_image_ids
+
     def commit_all_changes(self):
         if self._config_repo:
             logging.info('Committing changes in config repo')
@@ -1223,12 +1267,6 @@ def main():
         logging.critical('Failed to initialize Pulp: {0}'.format(e))
         sys.exit(1)
 
-    try:
-        rhmeta = RedHatMeta(**config.redhat_meta_conf)
-    except Exception as e:
-        logging.critical('Failed to initialize Red Hat Meta class: {0}'.format(e))
-        sys.exit(1)
-
     ret = 0
 
     if args.action == 'status':
@@ -1270,7 +1308,7 @@ def main():
         try:
             aws.create_bucket()
             openshift.create_domain()
-            openshift.create_app(rhmeta.redhat_meta_files)
+            openshift.create_app(config.redhat_meta_files)
             logging.info('ISV "{0}" was setup correctly'.format(config.isv))
             print 'ISV "{0}" was setup correctly'.format(config.isv)
         except AwsError as e:
@@ -1286,7 +1324,7 @@ def main():
     elif args.action == 'publish':
         try:
             pulp.download_repo()
-            aws.upload_layers(pulp.files_for_aws(rhmeta.image_ids))
+            aws.upload_layers(pulp.files_for_aws(config.redhat_image_ids))
             openshift.update_app([pulp.crane_config_file])
             logging.info('Published "{0}" image'.format(config.isv_app_name))
             print 'Published "{0}" image'.format(config.isv_app_name)
@@ -1305,7 +1343,7 @@ def main():
 
     elif args.action == 'pulp-upload':
         try:
-            pulp.upload_image(config.file_upload)
+            pulp.upload_image(config.file_upload, config.redhat_image_ids)
         except PulpError as e:
             logging.error('Failed to upload image to pulp: {0}'.format(e))
             ret = 1
@@ -1318,7 +1356,6 @@ def main():
 
     openshift.cleanup()
     pulp.cleanup()
-    rhmeta.cleanup()
 
     sys.exit(ret)
 

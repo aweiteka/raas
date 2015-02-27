@@ -282,6 +282,7 @@ class PulpServer(object):
                 self._isv_app_name, file_upload))
         print 'Got "{0}" as app name from the image "{1}"'.format(
                 self._isv_app_name, file_upload)
+        self._isv_app_name = self._isv_app_name.replace('/', '-')
 
     def _get_hierarchy_from_image(self, file_upload):
         logging.info('Getting layers hierarchy from image "{0}"'.format(file_upload))

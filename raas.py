@@ -122,7 +122,8 @@ class PulpServer(object):
             logging.info('Posting to pulp URL "{0}"'.format(url))
             if payload:
                 logging.debug('Pulp HTTP payload:\n{0}'.format(json.dumps(payload, indent=2)))
-            r = requests.post(url, auth=(self._username, self._password), data=json.dumps(payload), verify=self._verify_ssl)
+            r = requests.post(url, auth=(self._username, self._password),
+                    data=json.dumps(payload), headers={'content-type': 'application/json'}, verify=self._verify_ssl)
         elif req_type == 'put':
             # some calls pass in binary data so we don't log payload data or json encode it here
             logging.info('Putting to pulp URL "{0}"'.format(url))
@@ -661,12 +662,6 @@ class Openshift(object):
             self._isv_app_crane_file = filename
         return self._isv_app_crane_file
 
-    @property
-    def _env_vars(self):
-        """Required environment variables to make crane work on openshift"""
-        return [('OPENSHIFT_PYTHON_WSGI_APPLICATION', 'crane/wsgi.py'),
-                ('OPENSHIFT_PYTHON_DOCUMENT_ROOT', 'crane/')]
-
     def _call_openshift(self, url, req_type='get', payload=None):
         headers = {'authorization': 'Bearer ' + self._token}
         if not url.startswith(self._server_url):
@@ -676,12 +671,14 @@ class Openshift(object):
             r = requests.get(url, headers=headers)
         elif req_type == 'post':
             logging.info('Posting to openshift URL "{0}"'.format(url))
-            logging.debug('Posting data: {0}'.format(payload))
-            r = requests.post(url, headers=headers, data=payload)
+            logging.debug('Posting data: {0}'.format(json.dumps(payload, indent=2)))
+            headers['content-type'] = 'application/json'
+            r = requests.post(url, headers=headers, data=json.dumps(payload))
         elif req_type == 'put':
             logging.info('Putting to openshift URL "{0}"'.format(url))
-            logging.debug('Putting data: {0}'.format(payload))
-            r = requests.put(url, headers=headers, data=payload)
+            logging.debug('Putting data: {0}'.format(json.dumps(payload, indent=2)))
+            headers['content-type'] = 'application/json'
+            r = requests.put(url, headers=headers, data=json.dumps(payload))
         else:
             logging.error('Invalid value of "req_type" parameter: {0}'.format(req_type))
             raise ValueError('Invalid value of "req_type" parameter')
@@ -706,28 +703,6 @@ class Openshift(object):
             raise OpenshiftError('Received invalid status code: {0}'.format(r.status_code))
 
         return r_json
-
-    def _set_env_vars(self):
-        for key, val in self._env_vars:
-            logging.info('Setting openshift environment variable "{0}"'.format(key))
-            payload = {'name': key, 'value': val}
-            r_json = self._call_openshift(
-                    self.app_data['links']['ADD_ENVIRONMENT_VARIABLE']['href'],
-                    'post', payload)
-            if r_json['status'] != 'created':
-                logging.error('Failed to set openshift env variable "{0}"'.format(key))
-                raise OpenshiftError('Failed to set Openshift env variable')
-
-    def _restart_app(self):
-        logging.info('Restarting openshift application "{0}"'.format(self.app_name))
-        print 'Restarting openshift application "{0}"'.format(self.app_name)
-        payload = {'event': 'restart'}
-        r_json = self._call_openshift(self.app_data['links']['RESTART']['href'],
-                'post', payload)
-        if r_json['status'] != 'ok':
-            logging.error('Failed to restart openshift app "{0}"'.format(self.app_name))
-            raise OpenshiftError('Failed to restart Openshift app')
-        logging.info('Restarted openshift application "{0}"'.format(self.app_name))
 
     def clone_app(self):
         if not self._app_repo:
@@ -798,10 +773,21 @@ class Openshift(object):
             logging.info('Openshift app "{0}" already exists'.format(self.app_name))
             print 'Openshift app "{0}" already exists'.format(self.app_name)
         except OpenshiftError:
-            payload = {'name'           : self.app_name,
-                       'cartridge'      : self._cartridge,
-                       'initial_git_url': self._app_git_url,
-                       'scale'          : self._app_scale}
+            payload = {
+                'name'                 : self.app_name,
+                'cartridge'            : self._cartridge,
+                'initial_git_url'      : self._app_git_url,
+                'scale'                : self._app_scale,
+                'environment_variables': [{
+                    'name' : 'OPENSHIFT_PYTHON_WSGI_APPLICATION',
+                    'value': 'crane/wsgi.py',
+                }, {
+                    'name' : 'OPENSHIFT_PYTHON_DOCUMENT_ROOT',
+                    'value': 'crane/',
+                }, {
+                    'name' : 'HAPROXY_CARTRIDGE_HTTPCHK_URI',
+                    'value': '/v1/_ping',}]
+            }
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Creating openshift application "{0}"'.format(self.app_name))
             if self._app_scale:
@@ -815,7 +801,6 @@ class Openshift(object):
                 logging.error('Failed to create openshift app "{0}"'.format(self.app_name))
                 raise OpenshiftError('Failed to create openshift app "{0}"'.format(self.app_name))
             self._app_data = r_json['data']
-            self._set_env_vars()
 
             if self._app_git_branch != 'master':
                 payload = {'deployment_branch': self._app_git_branch}
@@ -836,7 +821,6 @@ class Openshift(object):
                     raise OpenshiftError('Failed to deploy openshift app "{0}"'.format(self.app_name))
                 self.verify_app()
             else:
-                self._restart_app()
                 self.verify_app()
 
             logging.info('Created openshift app "{0}" with ID "{1}"'\
@@ -854,6 +838,7 @@ class Openshift(object):
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
         files_to_add = []
         for i in data_files:
+            logging.debug('Copying file "{0}" to openshit crane data dir'.format(i))
             shutil.copy(i, dest_dir)
             files_to_add.append(os.path.join(dest_dir, os.path.basename(i)))
         self._app_repo.index.add(files_to_add)

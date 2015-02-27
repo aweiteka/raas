@@ -1,6 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# raas - docker registry tooling that integrates with Pulp and Crane
+# Copyright (C) 2015  Red Hat, Inc.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 import json
 import logging
 import os
@@ -10,7 +26,7 @@ import shutil
 import sys
 import tarfile
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from boto import connect_s3, s3
 from ConfigParser import SafeConfigParser
 from datetime import date
@@ -1171,7 +1187,10 @@ def main():
     isv_app_kwargs = {'metavar': 'ISV_APP_NAME',
             'help': 'ISV application name, for example: "some/app"'}
     parser = ArgumentParser(
-            description='This script is used to automate publishing of certified docker images from ISVs (Independent Software Vendors)')
+            formatter_class=RawDescriptionHelpFormatter,
+            description='This script is used to automate publishing of certified docker images from\nISVs (Independent Software Vendors)',
+            epilog='raas  Copyright (C) 2015  Red Hat, Inc.\nThis program comes with ABSOLUTELY NO WARRANTY.\nThis is free software, ' + \
+                    'and you are welcome to redistribute it\nunder certain conditions; see LICENSE file for details.')
     parser.add_argument('-n', '--nocommit', action='store_true',
             help='do not commit configuration (development only)')
     parser.add_argument('-l', '--log', metavar='LOG_LEVEL', default='ERROR',

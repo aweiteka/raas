@@ -1069,7 +1069,7 @@ class Configuration(object):
             return None
         r_url = '/'.join([self._parsed_config.get('aws', 'aws_url'),
                 self._parsed_config.get(self.isv, 's3_bucket'),
-                self._isv_app_name])
+                self._isv_app_name.replace('/', '-')])
         logging.info('Pulp redirect URL: {0}'.format(r_url))
         return r_url
 

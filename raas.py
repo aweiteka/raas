@@ -264,7 +264,7 @@ class PulpServer(object):
             logging.info('Image is already extracted in "{0}"'.format(self.data_dir))
             return
         logging.info('Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir))
-        print 'Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir)
+        print 'Extracting image "{0}"'.format(file_upload)
         with tarfile.open(file_upload) as tar:
             tar.extractall(self.data_dir)
         logging.info('Image "{0}" extracted to "{1}"'.format(file_upload, self.data_dir))
@@ -454,7 +454,6 @@ class PulpServer(object):
         with tarfile.open(self.exported_local_file) as tar:
             tar.extractall(self.data_dir)
         logging.info('Downloaded repo extracted to "{0}"'.format(self.data_dir))
-        print 'Downloaded repo extracted to "{0}"'.format(self.data_dir)
 
     def files_for_aws(self, redhat_images):
         """Return list of tuples of files from pulp to be uploaded to aws.
@@ -584,6 +583,7 @@ class Openshift(object):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
+        self._isv_app_name_orig = None
         self._isv_app_name = None
         self._isv_app_crane_file = None
         self._image_ids = set()
@@ -613,6 +613,7 @@ class Openshift(object):
     @isv_app_name.setter
     def isv_app_name(self, val):
         if val:
+            self._isv_app_name_orig = val
             self._isv_app_name = val.replace('/', '-')
 
     @property
@@ -665,9 +666,20 @@ class Openshift(object):
                 logging.warn('ISV app crane file "{0}" does not exist'.format(filename))
                 raise OpenshiftError('Missing ISV app crane file')
             logging.info('Using ISV app crane file "{0}"'.format(filename))
-            print 'Using ISV app crane file "{0}"'.format(filename)
             self._isv_app_crane_file = filename
         return self._isv_app_crane_file
+
+    @property
+    def docker_pull_cmd(self):
+        return 'docker pull {0}{1}'.format(self.get_app_url(True), self._isv_app_name_orig)
+
+    def get_app_url(self, without_proto=False):
+        if without_proto:
+            if self.app_data['app_url'].startswith('http://'):
+                return self.app_data['app_url'].lstrip('http://')
+            elif self.app_data['app_url'].startswith('https://'):
+                return self.app_data['app_url'].lstrip('https://')
+        return self.app_data['app_url']
 
     def _call_openshift(self, url, req_type='get', payload=None):
         headers = {'authorization': 'Bearer ' + self._token}
@@ -714,7 +726,6 @@ class Openshift(object):
     def clone_app(self):
         if not self._app_repo:
             logging.info('Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
-            print 'Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir)
             self._app_repo = Repo.clone_from(self.app_data['git_url'],
                     self.app_local_dir, branch=self._app_git_branch)
 
@@ -840,7 +851,7 @@ class Openshift(object):
         if not data_files:
             logging.info('No configuration data supplied')
             return
-        print 'Updating openshift crane application "{0}"'.format(self.app_name)
+        print 'Updating openshift crane application "{0}" (this can take a while..)'.format(self.app_name)
         self.clone_app()
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
         files_to_add = []
@@ -1300,6 +1311,8 @@ def main():
                     raise RaasError('Openshift crane images and AWS images do not match')
             logging.info('Status of "{0}" is OK'.format(config.isv))
             print 'Status of "{0}" is OK'.format(config.isv)
+            if config.isv_app_name:
+                print 'To pull this image with docker, use:\n# {0}'.format(openshift.docker_pull_cmd)
         except RaasError as e:
             logging.error('Failed to verify "{0}" status: {1}'.format(config.isv, e))
             ret = 1
@@ -1340,6 +1353,7 @@ def main():
             openshift.update_app([pulp.crane_config_file])
             logging.info('Published "{0}" image'.format(config.isv_app_name))
             print 'Published "{0}" image'.format(config.isv_app_name)
+            print 'To pull this image with docker, use:\n# {0}'.format(openshift.docker_pull_cmd)
         except PulpError as e:
             logging.error('Failed to download repo from pulp: {0}'.format(e))
             ret = 1

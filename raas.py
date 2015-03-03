@@ -90,7 +90,7 @@ class PulpServer(object):
             if not self._isv_app_name:
                 logging.error('ISV app name is required for pulp repo ID')
                 raise ConfigurationError('Missing ISV app name')
-            self._repo_id = '-'.join([self._isv, self._isv_app_name])
+            self._repo_id = '-'.join([self._isv, self._isv_app_name.replace('/', '-')])
         return self._repo_id
 
     @property
@@ -283,7 +283,6 @@ class PulpServer(object):
                 self._isv_app_name, file_upload))
         print 'Got "{0}" as app name from the image "{1}"'.format(
                 self._isv_app_name, file_upload)
-        self._isv_app_name = self._isv_app_name.replace('/', '-')
 
     def _get_hierarchy_from_image(self, file_upload):
         logging.info('Getting layers hierarchy from image "{0}"'.format(file_upload))
@@ -494,9 +493,11 @@ class AwsS3(object):
 
     def __init__(self, bucket_name, app_name, aws_key, aws_secret):
         self._bucket = None
+        self._app_name = None
         self._image_ids = set()
         self._bucket_name = bucket_name
-        self._app_name = app_name
+        if app_name:
+            self._app_name = app_name.replace('/', '-')
         self._connect(aws_key, aws_secret)
 
     @property
@@ -583,6 +584,7 @@ class Openshift(object):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
+        self._isv_app_name = None
         self._isv_app_crane_file = None
         self._image_ids = set()
         self._server_url = server_url
@@ -594,7 +596,7 @@ class Openshift(object):
         self._app_git_branch = app_git_branch
         self._cartridge = cartridge
         self._isv = isv
-        self._isv_app_name = isv_app_name
+        self.isv_app_name = isv_app_name
 
     @property
     def domain(self):
@@ -607,6 +609,11 @@ class Openshift(object):
     @property
     def isv_app_name(self):
         return self._isv_app_name
+
+    @isv_app_name.setter
+    def isv_app_name(self, val):
+        if val:
+            self._isv_app_name = val.replace('/', '-')
 
     @property
     def app_local_dir(self):
@@ -971,7 +978,7 @@ class Configuration(object):
             if not re.match('^[a-z0-9-_.]+$', app):
                 logging.error('App name part of ISV app name must contain only [a-z0-9-_.] characters: {0}'.format(app))
                 raise ValueError('Invalid ISV app name "{0}"'.format(val))
-            self._isv_app_name = val.replace('/', '-')
+            self._isv_app_name = val
         else:
             self._isv_app_name = None
         logging.debug('ISV app name set to "{0}"'.format(self._isv_app_name))

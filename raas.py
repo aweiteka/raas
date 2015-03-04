@@ -681,6 +681,24 @@ class Openshift(object):
                 return self.app_data['app_url'].lstrip('https://')
         return self.app_data['app_url']
 
+    def get_list_of_isv_apps(self):
+        isv_apps = []
+        self.clone_app()
+        glob_path = os.path.join(self.app_local_dir, 'crane', 'data', self._isv + '-*')
+        logging.info('Looking for ISV apps as "{0}"'.format(glob_path))
+        isv_apps_files = glob(glob_path)
+        if not isv_apps_files:
+            logging.info('ISV "{0}" has no published applications'.format(self._isv))
+            return isv_apps
+        logging.debug('Found ISV apps files: {0}'.format(isv_apps_files))
+        for filename in isv_apps_files:
+            with open(filename) as f:
+                data = json.load(f)
+            logging.debug('Content of file "{0}":\n{1}'.format(filename, json.dumps(data, indent=2)))
+            isv_apps.append(data['repo-registry-id'])
+        logging.info('ISV "{0}" has published apps: {1}'.format(self._isv, isv_apps))
+        return isv_apps
+
     def _call_openshift(self, url, req_type='get', payload=None):
         headers = {'authorization': 'Bearer ' + self._token}
         if not url.startswith(self._server_url):
@@ -812,7 +830,7 @@ class Openshift(object):
                 scalable = 'scalable '
             else:
                 scalable = ''
-            print 'Creating {0}openshift application "{1}" (this can take several minutes..)'.format(
+            print 'Creating {0}openshift application "{1}" (this can take a while..)'.format(
                     scalable, self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
             if r_json['status'] != 'created':
@@ -1116,7 +1134,7 @@ class Configuration(object):
 
     @property
     def redhat_meta_files(self):
-        glob_path = os.path.join(self._conf_dir, 'redhat', 'metadata') + os.sep + '*.json'
+        glob_path = os.path.join(self._conf_dir, 'redhat', 'metadata', '*.json')
         logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
         rhmeta_files = glob(glob_path)
         if not rhmeta_files:
@@ -1313,6 +1331,12 @@ def main():
             print 'Status of "{0}" is OK'.format(config.isv)
             if config.isv_app_name:
                 print 'To pull this image with docker, use:\n# {0}'.format(openshift.docker_pull_cmd)
+            else:
+                isv_apps = openshift.get_list_of_isv_apps()
+                if not isv_apps:
+                    print 'This ISV has no published docker images'
+                else:
+                    print 'This ISV has published docker images:\n - {0}'.format('\n - '.join(isv_apps))
         except RaasError as e:
             logging.error('Failed to verify "{0}" status: {1}'.format(config.isv, e))
             ret = 1

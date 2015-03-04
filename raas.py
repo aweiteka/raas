@@ -28,6 +28,7 @@ import tarfile
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from boto import connect_s3, s3
+from boto.exception import S3CreateError
 from ConfigParser import SafeConfigParser
 from datetime import date
 from git import Repo
@@ -490,11 +491,12 @@ class AwsError(Exception):
 class AwsS3(object):
     """Interact with AWS S3"""
 
-    def __init__(self, bucket_name, app_name, aws_key, aws_secret):
+    def __init__(self, bucket_name, app_name, aws_key, aws_secret, create):
         self._bucket = None
         self._app_name = None
         self._image_ids = set()
         self._bucket_name = bucket_name
+        self._create = create
         if app_name:
             self._app_name = app_name.replace('/', '-')
         self._connect(aws_key, aws_secret)
@@ -548,10 +550,17 @@ class AwsS3(object):
             logging.info('S3 bucket "{0}" already exists'.format(self.bucket_name))
             print 'S3 bucket "{0}" already exists'.format(self.bucket_name)
         except AwsError:
+            if not self._create:
+                logging.error('S3 bucket "{0}" is missing and "--create" option is not specified'.format(self.bucket_name))
+                raise AwsError('S3 bucket "{0}" is missing'.format(self.bucket_name))
             logging.info('Creating S3 bucket "{0}"'.format(self.bucket_name))
-            self._bucket = self._conn.create_bucket(self.bucket_name)
-            logging.info('Created S3 bucket "{0}"'.format(self.bucket_name))
-            print 'Created S3 bucket "{0}"'.format(self.bucket_name)
+            try:
+                self._bucket = self._conn.create_bucket(self.bucket_name)
+                logging.info('Created S3 bucket "{0}"'.format(self.bucket_name))
+                print 'Created S3 bucket "{0}"'.format(self.bucket_name)
+            except S3CreateError as e:
+                logging.error('Failed to create "{0}" S3 bucket: {1}'.format(self.bucket_name, e))
+                raise AwsError('Failed to create "{0}" S3 bucket'.format(self.bucket_name))
 
     def upload_layers(self, files):
         """Upload image layers to S3 bucket"""
@@ -578,8 +587,8 @@ class OpenshiftError(Exception):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, token, domain, app_name, app_scale,
-            app_git_url, app_git_branch, cartridge, isv, isv_app_name):
+    def __init__(self, server_url, token, domain, app_name, app_scale, gear_size,
+            app_git_url, app_git_branch, cartridge, isv, isv_app_name, create):
         self._app_data = None
         self._app_local_dir = None
         self._app_repo = None
@@ -592,11 +601,13 @@ class Openshift(object):
         self._domain = domain
         self._app_name = app_name
         self._app_scale = app_scale
+        self._gear_size = gear_size
         self._app_git_url = app_git_url
         self._app_git_branch = app_git_branch
         self._cartridge = cartridge
         self._isv = isv
         self.isv_app_name = isv_app_name
+        self._create = create
 
     @property
     def domain(self):
@@ -680,6 +691,24 @@ class Openshift(object):
             elif self.app_data['app_url'].startswith('https://'):
                 return self.app_data['app_url'].lstrip('https://')
         return self.app_data['app_url']
+
+    def get_list_of_isv_apps(self):
+        isv_apps = []
+        self.clone_app()
+        glob_path = os.path.join(self.app_local_dir, 'crane', 'data', self._isv + '-*')
+        logging.info('Looking for ISV apps as "{0}"'.format(glob_path))
+        isv_apps_files = glob(glob_path)
+        if not isv_apps_files:
+            logging.info('ISV "{0}" has no published applications'.format(self._isv))
+            return isv_apps
+        logging.debug('Found ISV apps files: {0}'.format(isv_apps_files))
+        for filename in isv_apps_files:
+            with open(filename) as f:
+                data = json.load(f)
+            logging.debug('Content of file "{0}":\n{1}'.format(filename, json.dumps(data, indent=2)))
+            isv_apps.append(data['repo-registry-id'])
+        logging.info('ISV "{0}" has published apps: {1}'.format(self._isv, isv_apps))
+        return isv_apps
 
     def _call_openshift(self, url, req_type='get', payload=None):
         headers = {'authorization': 'Bearer ' + self._token}
@@ -774,6 +803,9 @@ class Openshift(object):
             logging.info('Openshift domain "{0}" already exists'.format(self.domain))
             print 'Openshift domain "{0}" already exists'.format(self.domain)
         except OpenshiftError:
+            if not self._create:
+                logging.error('Openshift domain "{0}" is missing and "--create" option is not specified'.format(self.domain))
+                raise OpenshiftError('Openshift domain "{0}" is missing'.format(self.domain))
             url = 'broker/rest/domains'
             payload = {'name': self.domain}
             logging.info('Creating openshift domain "{0}"'.format(self.domain))
@@ -796,6 +828,7 @@ class Openshift(object):
                 'cartridge'            : self._cartridge,
                 'initial_git_url'      : self._app_git_url,
                 'scale'                : self._app_scale,
+                'gear_size'            : self._gear_size,
                 'environment_variables': [{
                     'name' : 'OPENSHIFT_PYTHON_WSGI_APPLICATION',
                     'value': 'crane/wsgi.py',
@@ -812,7 +845,7 @@ class Openshift(object):
                 scalable = 'scalable '
             else:
                 scalable = ''
-            print 'Creating {0}openshift application "{1}" (this can take several minutes..)'.format(
+            print 'Creating {0}openshift application "{1}" (this can take a while..)'.format(
                     scalable, self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
             if r_json['status'] != 'created':
@@ -883,8 +916,9 @@ class Configuration(object):
     _CONFIG_FILE_NAME    = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
-    def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
-            oodomain=None, ooapp=None, ooscale=True, s3bucket=None):
+    def __init__(self, isv, config_branch, create=False, isv_app_name=None,
+            file_upload=None, oodomain=None, ooapp=None, ooscale=True,
+            oogearsize=None, s3bucket=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -894,11 +928,13 @@ class Configuration(object):
         self._redhat_image_ids = set()
         self.config_branch = config_branch
         self.isv = isv
+        self._create = create
         self.isv_app_name = isv_app_name
         self.file_upload = file_upload
         self.oodomain = oodomain
         self.ooapp = ooapp
         self.ooscale = ooscale
+        self.oogearsize = oogearsize
         self.s3bucket = s3bucket
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
@@ -1009,7 +1045,7 @@ class Configuration(object):
                 raise ValueError('Invalid openshift domain "{0}"'.format(val))
             self._oodomain = val.lower()
         else:
-            self._oodomain = self.isv
+            self._oodomain = None
         logging.debug('Openshift domain set to "{0}"'.format(self._oodomain))
 
     @property
@@ -1043,6 +1079,21 @@ class Configuration(object):
         logging.debug('Openshift scale param set to "{0}"'.format(self._ooscale))
 
     @property
+    def oogearsize(self):
+        return self._oogearsize
+
+    @oogearsize.setter
+    def oogearsize(self, val):
+        if val:
+            if val not in ['small', 'small.highcpu', 'medium', 'large']:
+                logging.error('Openshift gear size "{0}" must be one of "small", "small.highcpu", "medium", "large"'.format(val))
+                raise ValueError('Invalid openshift gear size "{0}"'.format(val))
+            self._oogearsize = val
+        else:
+            self._oogearsize = 'small'
+        logging.debug('Openshift gear size set to "{0}"'.format(self._oogearsize))
+
+    @property
     def s3bucket(self):
         return self._s3bucket
 
@@ -1058,7 +1109,7 @@ class Configuration(object):
                 raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
             self._s3bucket = val
         else:
-            self._s3bucket = self.isv + '.bucket'
+            self._s3bucket = None
         logging.debug('S3 bucket name set to "{0}"'.format(self._s3bucket))
 
     @property
@@ -1096,18 +1147,21 @@ class Configuration(object):
                 'domain'        : self._parsed_config.get(self.isv, 'openshift_domain'),
                 'app_name'      : self._parsed_config.get(self.isv, 'openshift_app'),
                 'app_scale'     : self._parsed_config.getboolean(self.isv, 'openshift_scale'),
+                'gear_size'     : self._parsed_config.get(self.isv, 'openshift_gear_size'),
                 'app_git_url'   : self._parsed_config.get('openshift', 'app_git_url'),
                 'app_git_branch': self._parsed_config.get('openshift', 'app_git_branch'),
                 'cartridge'     : self._parsed_config.get('openshift', 'cartridge'),
                 'isv'           : self.isv,
-                'isv_app_name'  : self._isv_app_name}
+                'isv_app_name'  : self._isv_app_name,
+                'create'        : self._create}
 
     @property
     def aws_conf(self):
         return {'bucket_name': self._parsed_config.get(self.isv, 's3_bucket'),
                 'app_name'   : self._isv_app_name,
                 'aws_key'    : self._parsed_config.get('aws', 'aws_access_key'),
-                'aws_secret' : self._parsed_config.get('aws', 'aws_secret_access_key')}
+                'aws_secret' : self._parsed_config.get('aws', 'aws_secret_access_key'),
+                'create'     : self._create}
 
     @property
     def redhat_meta_conf(self):
@@ -1116,7 +1170,7 @@ class Configuration(object):
 
     @property
     def redhat_meta_files(self):
-        glob_path = os.path.join(self._conf_dir, 'redhat', 'metadata') + os.sep + '*.json'
+        glob_path = os.path.join(self._conf_dir, 'redhat', 'metadata', '*.json')
         logging.info('Looking for Red Hat meta files in "{0}"'.format(glob_path))
         rhmeta_files = glob(glob_path)
         if not rhmeta_files:
@@ -1163,17 +1217,25 @@ class Configuration(object):
     def _setup_isv_config_file(self):
         """Setup config file defaults if not provided"""
         if not self._parsed_config.has_section(self.isv):
+            if not self.oodomain:
+                logging.error('Openshift domain name is missing. Please specify it with "--oodomain" option')
+                raise ConfigurationError('Missing openshift domain name')
+            if not self.s3bucket:
+                logging.error('AWS S3 bucket name is missing. Please specify it with "--s3bucket" option')
+                raise ConfigurationError('Missing AWS S3 bucket name')
             logging.info('Creating default ISV section in config file')
             self._parsed_config.add_section(self.isv)
             self._parsed_config.set(self.isv, 'openshift_domain', self.oodomain)
             self._parsed_config.set(self.isv, 'openshift_app', self.ooapp)
             self._parsed_config.set(self.isv, 'openshift_scale', str(self.ooscale))
+            self._parsed_config.set(self.isv, 'openshift_gear_size', self.oogearsize)
             self._parsed_config.set(self.isv, 's3_bucket', self.s3bucket)
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)
             logging.debug('ISV openshift domain set to "{0}"'.format(self.oodomain))
             logging.debug('ISV openshift app name set to "{0}"'.format(self.ooapp))
             logging.debug('ISV openshift scale set to "{0}"'.format(self.ooscale))
+            logging.debug('ISV openshift gear size set to "{0}"'.format(self.oogearsize))
             logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
 
 
@@ -1213,14 +1275,19 @@ def main():
     setup_parser = subparsers.add_parser('setup',
             help='setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
-    setup_parser.add_argument('--oodomain',
-            help='openshift domain for this ISV if ISV is not set in config file, default is ISV name')
-    setup_parser.add_argument('--ooapp',
+    setup_parser.add_argument('--create', action='store_true',
+            help='create openshift domain and AWS S3 bucket if does not exist; by default program fails if they do not exist')
+    setup_parser.add_argument('--oodomain', metavar='DOMAIN',
+            help='openshift domain for this ISV if ISV is not set in config file')
+    setup_parser.add_argument('--ooapp', metavar='APP_NAME', default='registry',
             help='openshift crane app name for this ISV if ISV is not set in config file, default is "registry"')
     setup_parser.add_argument('--oonoscale', action='store_false',
             help='disable scaling of openshift crane app if not set in config file; by default, scaling is enabled')
-    setup_parser.add_argument('--s3bucket',
-            help='AWS S3 bucket name for this ISV if ISV is not set in config file, default is [ISV_NAME].bucket')
+    setup_parser.add_argument('--oogearsize', metavar='GEAR_SIZE', default='small',
+            choices=['small', 'small.highcpu', 'medium', 'large'],
+            help='openshift gear size of crane app if not set in config file; one of "small", "small.highcpu", "medium", "large"; default is "small"')
+    setup_parser.add_argument('--s3bucket', metavar='BUCKET',
+            help='AWS S3 bucket name for this ISV if ISV is not set in config file')
     publish_parser = subparsers.add_parser('publish',
             help='publish new or updated image')
     publish_parser.add_argument(*isv_args, **isv_kwargs)
@@ -1245,6 +1312,8 @@ def main():
         config_kwargs = {}
         if hasattr(args, 'isv_app'):
             config_kwargs['isv_app_name'] = args.isv_app
+        if hasattr(args, 'create'):
+            config_kwargs['create'] = args.create
         if hasattr(args, 'file_upload'):
             config_kwargs['file_upload'] = args.file_upload
         if hasattr(args, 'oodomain'):
@@ -1253,6 +1322,8 @@ def main():
             config_kwargs['ooapp'] = args.ooapp
         if hasattr(args, 'oonoscale'):
             config_kwargs['ooscale'] = args.oonoscale
+        if hasattr(args, 'oogearsize'):
+            config_kwargs['oogearsize'] = args.oogearsize
         if hasattr(args, 's3bucket'):
             config_kwargs['s3bucket'] = args.s3bucket
         config_kwargs['config_branch'] = args.configenv
@@ -1313,6 +1384,12 @@ def main():
             print 'Status of "{0}" is OK'.format(config.isv)
             if config.isv_app_name:
                 print 'To pull this image with docker, use:\n# {0}'.format(openshift.docker_pull_cmd)
+            else:
+                isv_apps = openshift.get_list_of_isv_apps()
+                if not isv_apps:
+                    print 'This ISV has no published docker images'
+                else:
+                    print 'This ISV has published docker images:\n - {0}'.format('\n - '.join(isv_apps))
         except RaasError as e:
             logging.error('Failed to verify "{0}" status: {1}'.format(config.isv, e))
             ret = 1

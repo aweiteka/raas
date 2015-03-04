@@ -578,7 +578,7 @@ class OpenshiftError(Exception):
 class Openshift(object):
     """Interact with Openshift REST API"""
 
-    def __init__(self, server_url, token, domain, app_name, app_scale,
+    def __init__(self, server_url, token, domain, app_name, app_scale, gear_size,
             app_git_url, app_git_branch, cartridge, isv, isv_app_name):
         self._app_data = None
         self._app_local_dir = None
@@ -592,6 +592,7 @@ class Openshift(object):
         self._domain = domain
         self._app_name = app_name
         self._app_scale = app_scale
+        self._gear_size = gear_size
         self._app_git_url = app_git_url
         self._app_git_branch = app_git_branch
         self._cartridge = cartridge
@@ -814,6 +815,7 @@ class Openshift(object):
                 'cartridge'            : self._cartridge,
                 'initial_git_url'      : self._app_git_url,
                 'scale'                : self._app_scale,
+                'gear_size'            : self._gear_size,
                 'environment_variables': [{
                     'name' : 'OPENSHIFT_PYTHON_WSGI_APPLICATION',
                     'value': 'crane/wsgi.py',
@@ -902,7 +904,7 @@ class Configuration(object):
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
     def __init__(self, isv, config_branch, isv_app_name=None, file_upload=None,
-            oodomain=None, ooapp=None, ooscale=True, s3bucket=None):
+            oodomain=None, ooapp=None, ooscale=True, oogearsize=None, s3bucket=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -917,6 +919,7 @@ class Configuration(object):
         self.oodomain = oodomain
         self.ooapp = ooapp
         self.ooscale = ooscale
+        self.oogearsize = oogearsize
         self.s3bucket = s3bucket
 
         if os.path.isfile(self._CONFIG_FILE_NAME):
@@ -1061,6 +1064,21 @@ class Configuration(object):
         logging.debug('Openshift scale param set to "{0}"'.format(self._ooscale))
 
     @property
+    def oogearsize(self):
+        return self._oogearsize
+
+    @oogearsize.setter
+    def oogearsize(self, val):
+        if val:
+            if val not in ['small', 'small.highcpu', 'medium', 'large']:
+                logging.error('Openshift gear size "{0}" must be one of "small", "small.highcpu", "medium", "large"'.format(val))
+                raise ValueError('Invalid openshift gear size "{0}"'.format(val))
+            self._oogearsize = val
+        else:
+            self._oogearsize = 'small'
+        logging.debug('Openshift gear size set to "{0}"'.format(self._oogearsize))
+
+    @property
     def s3bucket(self):
         return self._s3bucket
 
@@ -1114,6 +1132,7 @@ class Configuration(object):
                 'domain'        : self._parsed_config.get(self.isv, 'openshift_domain'),
                 'app_name'      : self._parsed_config.get(self.isv, 'openshift_app'),
                 'app_scale'     : self._parsed_config.getboolean(self.isv, 'openshift_scale'),
+                'gear_size'     : self._parsed_config.get(self.isv, 'openshift_gear_size'),
                 'app_git_url'   : self._parsed_config.get('openshift', 'app_git_url'),
                 'app_git_branch': self._parsed_config.get('openshift', 'app_git_branch'),
                 'cartridge'     : self._parsed_config.get('openshift', 'cartridge'),
@@ -1186,12 +1205,14 @@ class Configuration(object):
             self._parsed_config.set(self.isv, 'openshift_domain', self.oodomain)
             self._parsed_config.set(self.isv, 'openshift_app', self.ooapp)
             self._parsed_config.set(self.isv, 'openshift_scale', str(self.ooscale))
+            self._parsed_config.set(self.isv, 'openshift_gear_size', self.oogearsize)
             self._parsed_config.set(self.isv, 's3_bucket', self.s3bucket)
             with open(self._conf_file, 'w') as configfile:
                 self._parsed_config.write(configfile)
             logging.debug('ISV openshift domain set to "{0}"'.format(self.oodomain))
             logging.debug('ISV openshift app name set to "{0}"'.format(self.ooapp))
             logging.debug('ISV openshift scale set to "{0}"'.format(self.ooscale))
+            logging.debug('ISV openshift gear size set to "{0}"'.format(self.oogearsize))
             logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
 
 
@@ -1231,13 +1252,16 @@ def main():
     setup_parser = subparsers.add_parser('setup',
             help='setup initial configuration')
     setup_parser.add_argument(*isv_args, **isv_kwargs)
-    setup_parser.add_argument('--oodomain',
+    setup_parser.add_argument('--oodomain', metavar='DOMAIN',
             help='openshift domain for this ISV if ISV is not set in config file, default is ISV name')
-    setup_parser.add_argument('--ooapp',
+    setup_parser.add_argument('--ooapp', metavar='APP_NAME', default='registry',
             help='openshift crane app name for this ISV if ISV is not set in config file, default is "registry"')
     setup_parser.add_argument('--oonoscale', action='store_false',
             help='disable scaling of openshift crane app if not set in config file; by default, scaling is enabled')
-    setup_parser.add_argument('--s3bucket',
+    setup_parser.add_argument('--oogearsize', metavar='GEAR_SIZE', default='small',
+            choices=['small', 'small.highcpu', 'medium', 'large'],
+            help='openshift gear size of crane app if not set in config file; one of "small", "small.highcpu", "medium", "large"; default is "small"')
+    setup_parser.add_argument('--s3bucket', metavar='BUCKET',
             help='AWS S3 bucket name for this ISV if ISV is not set in config file, default is [ISV_NAME].bucket')
     publish_parser = subparsers.add_parser('publish',
             help='publish new or updated image')
@@ -1271,6 +1295,8 @@ def main():
             config_kwargs['ooapp'] = args.ooapp
         if hasattr(args, 'oonoscale'):
             config_kwargs['ooscale'] = args.oonoscale
+        if hasattr(args, 'oogearsize'):
+            config_kwargs['oogearsize'] = args.oogearsize
         if hasattr(args, 's3bucket'):
             config_kwargs['s3bucket'] = args.s3bucket
         config_kwargs['config_branch'] = args.configenv

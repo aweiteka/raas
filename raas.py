@@ -1223,10 +1223,10 @@ class Configuration(object):
         """Setup config file defaults if not provided"""
         if not self._parsed_config.has_section(self.isv):
             if not self.oodomain:
-                logging.error('Openshift domain name is missing. Please specify it with "--oodomain" option')
+                logging.error('Openshift domain name is missing. Please specify it with "--oodomain" option or in config file')
                 raise ConfigurationError('Missing openshift domain name')
             if not self.s3bucket:
-                logging.error('AWS S3 bucket name is missing. Please specify it with "--s3bucket" option')
+                logging.error('AWS S3 bucket name is missing. Please specify it with "--s3bucket" option or in config file')
                 raise ConfigurationError('Missing AWS S3 bucket name')
             logging.info('Creating default ISV section in config file')
             self._parsed_config.add_section(self.isv)

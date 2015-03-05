@@ -21,7 +21,7 @@ Below is a typical use of the `raas` tool. The following global options may be u
 1. a saved docker image: `docker save <some/image> > some-image.tar`
 
 ```
-raas pulp-upload <isv> <some/image> some-image.tar
+raas pulp-upload <isv> some-image.tar
 ```
 
 * creates pulp repository for docker content if it doesn't exist
@@ -31,11 +31,11 @@ raas pulp-upload <isv> <some/image> some-image.tar
 
 **Prerequisites**
 
-1. Create an OpenShift domain
-1. Create an empty AWS S3 bucket with read+write permissions.
+1. An OpenShift domain
+1. An AWS S3 bucket with read+write permissions.
 
 ```
-raas setup <isv>
+raas setup <isv> --oodomain <domain> --s3bucket <bucket>
 ```
 
 * Validates openshift domain
@@ -64,7 +64,7 @@ raas publish <isv> <some/image>
 ### Status
 
 ```
-raas status <isv> -a <some/image> --pulp
+raas status <isv> -a [<some/image>] [--pulp]
 ```
 
 * Checks domain is present
@@ -88,45 +88,44 @@ The container packaging of this tool has additional troubleshooting tools instal
     * Inspect configuration repo: `git clone ...`
 
 ## Installation
+The raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to manage and troubleshoot the registry without workstation dependencies.
 
-**Requirements**
+The container provides `raas`, `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` to add your username for the `rhc` client to work.
 
-* Python 2.6 or 2.7
-* AWS S3 account
-* OpenShift account
-* Private repository of credentials and other configuration
+### Requirements
 
+* docker 1.4 or greater
+* Private repository of below credentials and other configuration
+  * AWS S3 account token
+  * OpenShift account token
+  * Credentials for Pulp server running version 2.5 or greater
 
-1. Clone this repository: `git clone https://github.com/aweiteka/raas.git`
-1. Install Python dependencies: `pip install -r requirements.txt`
-1. Make the script executable: `chmod +x raas.py`
-1. choose configuration option (below)
-1. run tool as `./raas.py ...`
+### Setup
+NOTE: Most of these steps will be automated with the introduction of the `atomic install|run` tool.
 
-### Configuration
+1. Pull container image. The 'latest' tag (assumed) tracks the stable release of the project.
 
-There are two ways to manage the configuration of the environment. To use a local configuration, run `raas` from the directory where the `raas.cfg` directory.
+        docker pull aweiteka/raas
 
-#### Remote
+1. Create directory for uploading content to pulp
 
-1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
+        mkdir /run/docker_uploads
 
-#### Local (development only)
-Run `raas` from the directory where the `raas.cfg` directory.
+1. Set selinux context for directories mounted into the container:
 
-1. Copy config file `cp raas.cfg.template raas.cfg`
-1. Edit `raas.cfg` config file.
+        sudo chcon -Rv -u system_u -t svirt_sandbox_file_t /run/docker_uploads
+        sudo chcon -Rv -u system_u -t svirt_sandbox_file_t $HOME/.ssh
 
-## Running as container
+1. Edit your `$HOME/.bashrc` file. This sets an environment variable of read+write private repository and adds an alias for running the container.
 
-Instead of running on a dedicated host, the raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to manage and troubleshoot the registry without workstation dependencies.
+        export RAAS_CONF_REPO=ssh://git@github.com:user/private-raas-config.git
+        alias raas='sudo docker run -it --rm \
+                    -e RAAS_CONF_REPO=$RAAS_CONF_REPO \
+                    -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
+                    -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
+                    aweiteka/raas'
 
-```
-[sudo] docker run -it --rm \
-              -e RAAS_CONF_REPO="ssh://user@git.example.com:22/private-raas-config" \
-              -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
-              -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
-              aweiteka/raas
-```
-This provides access to `raas`, `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` to add your username for the `rhc` client to work.
+1. Source the `.bashrc` file
+
+        source .bashrc
 

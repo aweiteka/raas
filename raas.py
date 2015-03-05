@@ -640,9 +640,7 @@ class Openshift(object):
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Getting openshift app data for "{0}"'.format(self.app_name))
             r_json = self._call_openshift(url)
-            if r_json['status'] != 'ok':
-                logging.error('Failed to get applications in domain "{0}"'.format(self.domain))
-                raise OpenshiftError('Failed to get applications in domain "{0}"'.format(self.domain))
+            self._check_status(r_json, 'ok', 'Failed to get application "{0}" in domain "{1}"'.format(self.app_name, self.domain))
             for app in r_json['data']:
                 logging.debug('Inspecting openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                 if app['name'] == self.app_name:
@@ -752,6 +750,12 @@ class Openshift(object):
 
         return r_json
 
+    def _check_status(self, r_json, expected_status, error_msg, log_level=logging.ERROR):
+        if r_json['status'] != expected_status:
+            oomsgs = [m['text'] for m in r_json['messages']]
+            logging.log(log_level, '{0}: {1}'.format(error_msg, '; '.join(oomsgs)))
+            raise OpenshiftError(error_msg)
+
     def clone_app(self):
         if not self._app_repo:
             logging.info('Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
@@ -763,9 +767,7 @@ class Openshift(object):
         url = 'broker/rest/domains/{0}'.format(self.domain)
         logging.info('Verifying openshift domain "{0}"'.format(self.domain))
         r_json = self._call_openshift(url)
-        if r_json['status'] != 'ok':
-            logging.warn('Openshift domain "{0}" does not exist'.format(self.domain))
-            raise OpenshiftError('Failed to find openshift domain "{0}"'.format(self.domain))
+        self._check_status(r_json, 'ok', 'Openshift domain "{0}" does not exist'.format(self.domain), logging.WARN)
         logging.info('Openshift domain "{0}" looks OK'.format(self.domain))
         print 'Openshift domain "{0}" looks OK'.format(self.domain)
 
@@ -810,9 +812,7 @@ class Openshift(object):
             payload = {'name': self.domain}
             logging.info('Creating openshift domain "{0}"'.format(self.domain))
             r_json = self._call_openshift(url, 'post', payload)
-            if r_json['status'] != 'created':
-                logging.error('Domain "{0}" could not be created'.format(self.domain))
-                raise OpenshiftError('Domain "{0}" could not be created'.format(self.domain))
+            self._check_status(r_json, 'created', 'Domain "{0}" could not be created'.format(self.domain))
             logging.info('Created openshift domain "{0}"'.format(self.domain))
             print 'Created openshift domain "{0}"'.format(self.domain)
 
@@ -848,18 +848,14 @@ class Openshift(object):
             print 'Creating {0}openshift application "{1}" (this can take a while..)'.format(
                     scalable, self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
-            if r_json['status'] != 'created':
-                logging.error('Failed to create openshift app "{0}"'.format(self.app_name))
-                raise OpenshiftError('Failed to create openshift app "{0}"'.format(self.app_name))
+            self._check_status(r_json, 'created', 'Failed to create openshift app "{0}"'.format(self.app_name))
             self._app_data = r_json['data']
 
             if self._app_git_branch != 'master':
                 payload = {'deployment_branch': self._app_git_branch}
                 logging.info('Updating openshift application "{0}"'.format(self.app_name))
                 r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
-                if r_json['status'] != 'ok':
-                    logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
-                    raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
+                self._check_status(r_json, 'ok', 'Failed to update openshift app "{0}"'.format(self.app_name))
                 self._app_data = r_json['data']
 
             if redhat_meta:
@@ -867,9 +863,7 @@ class Openshift(object):
             elif self._app_git_branch != 'master':
                 logging.info('Deploying openshift application "{0}"'.format(self.app_name))
                 r_json = self._call_openshift(self.app_data['links']['DEPLOY']['href'], 'post', {})
-                if r_json['status'] != 'created':
-                    logging.error('Failed to deploy openshift app "{0}"'.format(self.app_name))
-                    raise OpenshiftError('Failed to deploy openshift app "{0}"'.format(self.app_name))
+                self._check_status(r_json, 'ok', 'Failed to deploy openshift app "{0}"'.format(self.app_name))
                 self.verify_app()
             else:
                 self.verify_app()
@@ -916,9 +910,9 @@ class Configuration(object):
     _CONFIG_FILE_NAME    = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
-    def __init__(self, isv, config_branch, create=False, isv_app_name=None,
-            file_upload=None, oodomain=None, ooapp=None, ooscale=True,
-            oogearsize=None, s3bucket=None):
+    def __init__(self, isv, config_branch, action, create=False,
+            isv_app_name=None, file_upload=None, oodomain=None, ooapp=None,
+            ooscale=True, oogearsize=None, s3bucket=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -926,8 +920,14 @@ class Configuration(object):
         """
         self._pulp_repo = None
         self._redhat_image_ids = set()
+        self._oodomain_param = False
+        self._ooapp_param = False
+        self._oogearsize_param = False
+        self._s3bucket_param = False
+
         self.config_branch = config_branch
         self.isv = isv
+        self._action = action
         self._create = create
         self.isv_app_name = isv_app_name
         self.file_upload = file_upload
@@ -1044,6 +1044,7 @@ class Configuration(object):
                 logging.error('Openshift domain "{0}" must not be longer than 16 characters'.format(val))
                 raise ValueError('Invalid openshift domain "{0}"'.format(val))
             self._oodomain = val.lower()
+            self._oodomain_param = True
         else:
             self._oodomain = None
         logging.debug('Openshift domain set to "{0}"'.format(self._oodomain))
@@ -1062,6 +1063,7 @@ class Configuration(object):
                 logging.error('Openshift app name "{0}" must not be longer than 32 characters'.format(val))
                 raise ValueError('Invalid openshift app name "{0}"'.format(val))
             self._ooapp = val.lower()
+            self._ooapp_param = True
         else:
             self._ooapp = 'registry'
         logging.debug('Openshift app name set to "{0}"'.format(self._ooapp))
@@ -1089,6 +1091,7 @@ class Configuration(object):
                 logging.error('Openshift gear size "{0}" must be one of "small", "small.highcpu", "medium", "large"'.format(val))
                 raise ValueError('Invalid openshift gear size "{0}"'.format(val))
             self._oogearsize = val
+            self._oogearsize_param = True
         else:
             self._oogearsize = 'small'
         logging.debug('Openshift gear size set to "{0}"'.format(self._oogearsize))
@@ -1108,6 +1111,7 @@ class Configuration(object):
                 logging.error('S3 bucket name "{0}" must not be longer than 32 characters'.format(val))
                 raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
             self._s3bucket = val
+            self._s3bucket_param = True
         else:
             self._s3bucket = None
         logging.debug('S3 bucket name set to "{0}"'.format(self._s3bucket))
@@ -1199,7 +1203,8 @@ class Configuration(object):
             # TODO: add crane config file from meta dir
             files = [self._conf_file, self.logfile]
             self._config_repo.index.add(files)
-            self._config_repo.index.commit('Updated configuration by raas script')
+            self._config_repo.index.commit('{0} {1} {2}update by raas script'\
+                    .format(self.isv, self._action, self.isv_app_name + ' ' if self.isv_app_name else ''))
             self._config_repo.remotes.origin.push()
 
     def _setup_isv_config_dirs(self):
@@ -1218,10 +1223,10 @@ class Configuration(object):
         """Setup config file defaults if not provided"""
         if not self._parsed_config.has_section(self.isv):
             if not self.oodomain:
-                logging.error('Openshift domain name is missing. Please specify it with "--oodomain" option')
+                logging.error('Openshift domain name is missing. Please specify it with "--oodomain" option or in config file')
                 raise ConfigurationError('Missing openshift domain name')
             if not self.s3bucket:
-                logging.error('AWS S3 bucket name is missing. Please specify it with "--s3bucket" option')
+                logging.error('AWS S3 bucket name is missing. Please specify it with "--s3bucket" option or in config file')
                 raise ConfigurationError('Missing AWS S3 bucket name')
             logging.info('Creating default ISV section in config file')
             self._parsed_config.add_section(self.isv)
@@ -1237,6 +1242,21 @@ class Configuration(object):
             logging.debug('ISV openshift scale set to "{0}"'.format(self.ooscale))
             logging.debug('ISV openshift gear size set to "{0}"'.format(self.oogearsize))
             logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
+        else:
+            if self._oodomain_param and self.oodomain != self._parsed_config.get(self.isv, 'openshift_domain'):
+                logging.error('--oodomain "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.oodomain, self._parsed_config.get(self.isv, 'openshift_domain')))
+            if self._ooapp_param and self.ooapp != self._parsed_config.get(self.isv, 'openshift_app'):
+                logging.error('--ooapp "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.ooapp, self._parsed_config.get(self.isv, 'openshift_app')))
+            if not self._ooscale and self._parsed_config.getboolean(self.isv, 'openshift_scale'):
+                logging.error('--oonoscale parameter is being ignored, current value is loaded from config file and openshift application will scale')
+            if self._oogearsize_param and self.oogearsize != self._parsed_config.get(self.isv, 'openshift_gear_size'):
+                logging.error('--oogearsize "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.oogearsize, self._parsed_config.get(self.isv, 'openshift_gear_size')))
+            if self._s3bucket_param and self.s3bucket != self._parsed_config.get(self.isv, 's3_bucket'):
+                logging.error('--s3bucket "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.s3bucket, self._parsed_config.get(self.isv, 's3_bucket')))
 
 
 class RaasError(Exception):
@@ -1279,11 +1299,11 @@ def main():
             help='create openshift domain and AWS S3 bucket if does not exist; by default program fails if they do not exist')
     setup_parser.add_argument('--oodomain', metavar='DOMAIN',
             help='openshift domain for this ISV if ISV is not set in config file')
-    setup_parser.add_argument('--ooapp', metavar='APP_NAME', default='registry',
+    setup_parser.add_argument('--ooapp', metavar='APP_NAME',
             help='openshift crane app name for this ISV if ISV is not set in config file, default is "registry"')
     setup_parser.add_argument('--oonoscale', action='store_false',
             help='disable scaling of openshift crane app if not set in config file; by default, scaling is enabled')
-    setup_parser.add_argument('--oogearsize', metavar='GEAR_SIZE', default='small',
+    setup_parser.add_argument('--oogearsize', metavar='GEAR_SIZE',
             choices=['small', 'small.highcpu', 'medium', 'large'],
             help='openshift gear size of crane app if not set in config file; one of "small", "small.highcpu", "medium", "large"; default is "small"')
     setup_parser.add_argument('--s3bucket', metavar='BUCKET',
@@ -1327,6 +1347,7 @@ def main():
         if hasattr(args, 's3bucket'):
             config_kwargs['s3bucket'] = args.s3bucket
         config_kwargs['config_branch'] = args.configenv
+        config_kwargs['action'] = args.action
         config = Configuration(args.isv, **config_kwargs)
     except ConfigurationError as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))

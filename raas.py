@@ -920,6 +920,11 @@ class Configuration(object):
         """
         self._pulp_repo = None
         self._redhat_image_ids = set()
+        self._oodomain_param = False
+        self._ooapp_param = False
+        self._oogearsize_param = False
+        self._s3bucket_param = False
+
         self.config_branch = config_branch
         self.isv = isv
         self._create = create
@@ -1038,6 +1043,7 @@ class Configuration(object):
                 logging.error('Openshift domain "{0}" must not be longer than 16 characters'.format(val))
                 raise ValueError('Invalid openshift domain "{0}"'.format(val))
             self._oodomain = val.lower()
+            self._oodomain_param = True
         else:
             self._oodomain = None
         logging.debug('Openshift domain set to "{0}"'.format(self._oodomain))
@@ -1056,6 +1062,7 @@ class Configuration(object):
                 logging.error('Openshift app name "{0}" must not be longer than 32 characters'.format(val))
                 raise ValueError('Invalid openshift app name "{0}"'.format(val))
             self._ooapp = val.lower()
+            self._ooapp_param = True
         else:
             self._ooapp = 'registry'
         logging.debug('Openshift app name set to "{0}"'.format(self._ooapp))
@@ -1083,6 +1090,7 @@ class Configuration(object):
                 logging.error('Openshift gear size "{0}" must be one of "small", "small.highcpu", "medium", "large"'.format(val))
                 raise ValueError('Invalid openshift gear size "{0}"'.format(val))
             self._oogearsize = val
+            self._oogearsize_param = True
         else:
             self._oogearsize = 'small'
         logging.debug('Openshift gear size set to "{0}"'.format(self._oogearsize))
@@ -1102,6 +1110,7 @@ class Configuration(object):
                 logging.error('S3 bucket name "{0}" must not be longer than 32 characters'.format(val))
                 raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
             self._s3bucket = val
+            self._s3bucket_param = True
         else:
             self._s3bucket = None
         logging.debug('S3 bucket name set to "{0}"'.format(self._s3bucket))
@@ -1231,6 +1240,21 @@ class Configuration(object):
             logging.debug('ISV openshift scale set to "{0}"'.format(self.ooscale))
             logging.debug('ISV openshift gear size set to "{0}"'.format(self.oogearsize))
             logging.debug('ISV S3 bucket name set to "{0}"'.format(self.s3bucket))
+        else:
+            if self._oodomain_param and self.oodomain != self._parsed_config.get(self.isv, 'openshift_domain'):
+                logging.error('--oodomain "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.oodomain, self._parsed_config.get(self.isv, 'openshift_domain')))
+            if self._ooapp_param and self.ooapp != self._parsed_config.get(self.isv, 'openshift_app'):
+                logging.error('--ooapp "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.ooapp, self._parsed_config.get(self.isv, 'openshift_app')))
+            if not self._ooscale and self._parsed_config.getboolean(self.isv, 'openshift_scale'):
+                logging.error('--oonoscale parameter is being ignored, current value is loaded from config file and openshift application will scale')
+            if self._oogearsize_param and self.oogearsize != self._parsed_config.get(self.isv, 'openshift_gear_size'):
+                logging.error('--oogearsize "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.oogearsize, self._parsed_config.get(self.isv, 'openshift_gear_size')))
+            if self._s3bucket_param and self.s3bucket != self._parsed_config.get(self.isv, 's3_bucket'):
+                logging.error('--s3bucket "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
+                        .format(self.s3bucket, self._parsed_config.get(self.isv, 's3_bucket')))
 
 
 class RaasError(Exception):
@@ -1273,11 +1297,11 @@ def main():
             help='create openshift domain and AWS S3 bucket if does not exist; by default program fails if they do not exist')
     setup_parser.add_argument('--oodomain', metavar='DOMAIN',
             help='openshift domain for this ISV if ISV is not set in config file')
-    setup_parser.add_argument('--ooapp', metavar='APP_NAME', default='registry',
+    setup_parser.add_argument('--ooapp', metavar='APP_NAME',
             help='openshift crane app name for this ISV if ISV is not set in config file, default is "registry"')
     setup_parser.add_argument('--oonoscale', action='store_false',
             help='disable scaling of openshift crane app if not set in config file; by default, scaling is enabled')
-    setup_parser.add_argument('--oogearsize', metavar='GEAR_SIZE', default='small',
+    setup_parser.add_argument('--oogearsize', metavar='GEAR_SIZE',
             choices=['small', 'small.highcpu', 'medium', 'large'],
             help='openshift gear size of crane app if not set in config file; one of "small", "small.highcpu", "medium", "large"; default is "small"')
     setup_parser.add_argument('--s3bucket', metavar='BUCKET',

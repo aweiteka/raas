@@ -7,6 +7,7 @@ RUN yum install -y git python-pip ruby rubygems
 ADD express.conf /root/.openshift/express.conf
 ADD requirements.txt /root/raas/
 ADD raas.py /root/raas/
+ADD VERSION /root/
 
 RUN pip install -r /root/raas/requirements.txt
 RUN pip install awscli

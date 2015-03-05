@@ -640,9 +640,7 @@ class Openshift(object):
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Getting openshift app data for "{0}"'.format(self.app_name))
             r_json = self._call_openshift(url)
-            if r_json['status'] != 'ok':
-                logging.error('Failed to get applications in domain "{0}"'.format(self.domain))
-                raise OpenshiftError('Failed to get applications in domain "{0}"'.format(self.domain))
+            self._check_status(r_json, 'ok', 'Failed to get applications "{0}" in domain "{1}"'.format(self.app_name, self.domain))
             for app in r_json['data']:
                 logging.debug('Inspecting openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                 if app['name'] == self.app_name:
@@ -752,6 +750,12 @@ class Openshift(object):
 
         return r_json
 
+    def _check_status(self, r_json, expected_status, error_msg, log_level=logging.ERROR):
+        if r_json['status'] != expected_status:
+            oomsgs = [m['text'] for m in r_json['messages']]
+            logging.log(log_level, '{0}: {1}'.format(error_msg, '; '.join(oomsgs)))
+            raise OpenshiftError(error_msg)
+
     def clone_app(self):
         if not self._app_repo:
             logging.info('Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
@@ -763,9 +767,7 @@ class Openshift(object):
         url = 'broker/rest/domains/{0}'.format(self.domain)
         logging.info('Verifying openshift domain "{0}"'.format(self.domain))
         r_json = self._call_openshift(url)
-        if r_json['status'] != 'ok':
-            logging.warn('Openshift domain "{0}" does not exist'.format(self.domain))
-            raise OpenshiftError('Failed to find openshift domain "{0}"'.format(self.domain))
+        self._check_status(r_json, 'ok', 'Openshift domain "{0}" does not exist'.format(self.domain), logging.WARN)
         logging.info('Openshift domain "{0}" looks OK'.format(self.domain))
         print 'Openshift domain "{0}" looks OK'.format(self.domain)
 
@@ -810,9 +812,7 @@ class Openshift(object):
             payload = {'name': self.domain}
             logging.info('Creating openshift domain "{0}"'.format(self.domain))
             r_json = self._call_openshift(url, 'post', payload)
-            if r_json['status'] != 'created':
-                logging.error('Domain "{0}" could not be created'.format(self.domain))
-                raise OpenshiftError('Domain "{0}" could not be created'.format(self.domain))
+            self._check_status(r_json, 'created', 'Domain "{0}" could not be created'.format(self.domain))
             logging.info('Created openshift domain "{0}"'.format(self.domain))
             print 'Created openshift domain "{0}"'.format(self.domain)
 
@@ -848,18 +848,14 @@ class Openshift(object):
             print 'Creating {0}openshift application "{1}" (this can take a while..)'.format(
                     scalable, self.app_name)
             r_json = self._call_openshift(url, 'post', payload)
-            if r_json['status'] != 'created':
-                logging.error('Failed to create openshift app "{0}"'.format(self.app_name))
-                raise OpenshiftError('Failed to create openshift app "{0}"'.format(self.app_name))
+            self._check_status(r_json, 'created', 'Failed to create openshift app "{0}"'.format(self.app_name))
             self._app_data = r_json['data']
 
             if self._app_git_branch != 'master':
                 payload = {'deployment_branch': self._app_git_branch}
                 logging.info('Updating openshift application "{0}"'.format(self.app_name))
                 r_json = self._call_openshift(self.app_data['links']['UPDATE']['href'], 'put', payload)
-                if r_json['status'] != 'ok':
-                    logging.error('Failed to update openshift app "{0}"'.format(self.app_name))
-                    raise OpenshiftError('Failed to update openshift app "{0}"'.format(self.app_name))
+                self._check_status(r_json, 'ok', 'Failed to update openshift app "{0}"'.format(self.app_name))
                 self._app_data = r_json['data']
 
             if redhat_meta:
@@ -867,9 +863,7 @@ class Openshift(object):
             elif self._app_git_branch != 'master':
                 logging.info('Deploying openshift application "{0}"'.format(self.app_name))
                 r_json = self._call_openshift(self.app_data['links']['DEPLOY']['href'], 'post', {})
-                if r_json['status'] != 'created':
-                    logging.error('Failed to deploy openshift app "{0}"'.format(self.app_name))
-                    raise OpenshiftError('Failed to deploy openshift app "{0}"'.format(self.app_name))
+                self._check_status(r_json, 'ok', 'Failed to deploy openshift app "{0}"'.format(self.app_name))
                 self.verify_app()
             else:
                 self.verify_app()

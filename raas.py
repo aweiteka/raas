@@ -640,7 +640,7 @@ class Openshift(object):
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Getting openshift app data for "{0}"'.format(self.app_name))
             r_json = self._call_openshift(url)
-            self._check_status(r_json, 'ok', 'Failed to get applications "{0}" in domain "{1}"'.format(self.app_name, self.domain))
+            self._check_status(r_json, 'ok', 'Failed to get application "{0}" in domain "{1}"'.format(self.app_name, self.domain))
             for app in r_json['data']:
                 logging.debug('Inspecting openshift app "{0}" with ID "{1}"'.format(app['name'], app['id']))
                 if app['name'] == self.app_name:
@@ -910,9 +910,9 @@ class Configuration(object):
     _CONFIG_FILE_NAME    = 'raas.cfg'
     _CONFIG_REPO_ENV_VAR = 'RAAS_CONF_REPO'
 
-    def __init__(self, isv, config_branch, create=False, isv_app_name=None,
-            file_upload=None, oodomain=None, ooapp=None, ooscale=True,
-            oogearsize=None, s3bucket=None):
+    def __init__(self, isv, config_branch, action, create=False,
+            isv_app_name=None, file_upload=None, oodomain=None, ooapp=None,
+            ooscale=True, oogearsize=None, s3bucket=None):
         """Setup Configuration object.
 
         Use current working dir as local config if it exists,
@@ -927,6 +927,7 @@ class Configuration(object):
 
         self.config_branch = config_branch
         self.isv = isv
+        self._action = action
         self._create = create
         self.isv_app_name = isv_app_name
         self.file_upload = file_upload
@@ -1202,7 +1203,8 @@ class Configuration(object):
             # TODO: add crane config file from meta dir
             files = [self._conf_file, self.logfile]
             self._config_repo.index.add(files)
-            self._config_repo.index.commit('Updated configuration by raas script')
+            self._config_repo.index.commit('{0} {1} {2}update by raas script'\
+                    .format(self.isv, self._action, self.isv_app_name + ' ' if self.isv_app_name else ''))
             self._config_repo.remotes.origin.push()
 
     def _setup_isv_config_dirs(self):
@@ -1345,6 +1347,7 @@ def main():
         if hasattr(args, 's3bucket'):
             config_kwargs['s3bucket'] = args.s3bucket
         config_kwargs['config_branch'] = args.configenv
+        config_kwargs['action'] = args.action
         config = Configuration(args.isv, **config_kwargs)
     except ConfigurationError as e:
         logging.critical('Failed to initialize raas: {0}'.format(e))

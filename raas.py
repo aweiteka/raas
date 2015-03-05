@@ -1201,8 +1201,8 @@ def main():
             choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
             help='desired log level one of "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL". Default is "ERROR"')
     parser.add_argument('-c', '--configenv', metavar='BRANCH', default='stage',
-            choices=['dev', 'stage', 'master'],
-            help='working configuration environment branch to use: "dev", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
+            choices=['dev', 'test', 'stage', 'master'],
+            help='working configuration environment branch to use: "dev", "test", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
     subparsers = parser.add_subparsers(dest='action')
     status_parser = subparsers.add_parser('status',
             help='check configuration status')

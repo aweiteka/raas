@@ -1,6 +1,12 @@
-# Docker Registry as a Service
+# Container Registry as a Service
 
 A docker registry service in the cloud that integrates with Pulp and the Red Hat ecosystem. Using a Pulp server the service deploys docker image layers to cloud storage (AWS S3) and OpenShift (Crane).
+
+## Tags
+
+* **latest** tracks the current stable release
+* **dev**  tracks the unstable master branch
+* **vx.y.z** will be retained for each release
 
 ## Basic Idea
 
@@ -11,7 +17,9 @@ Below is a typical use of the `raas` tool. The following global options may be u
 
 * Set configuration branch: `--configenv dev|stage|master` This is an important feature of `raas`. This enables the user to seemlessly switch between environments that are configured and managed completely separate from each other.
 * Set log level: `--log DEBUG|INFO`
-* Disable commiting configuration after tool runs: `--nocommit` This is typically only used in development.
+* Disable commiting configuration after tool runs: `--nocommit` This is typically only used in development or testing. You may wish to run `status` command with `--nocommit` since status makes no changes to the configuration, only log files.
+
+**NOTE**: The commands below assume the container has been launched in interactive shell mode, i.e. run `raas` then enter the commands below. However you may wish to pass arguments to the container. For example, `raas raas status <isv>`. The first "raas" is the `docker run` container alias; the second "raas" is the tool.
 
 ### Upload image to pulp server
 
@@ -20,8 +28,10 @@ Below is a typical use of the `raas` tool. The following global options may be u
 1. access to a pulp server
 1. a saved docker image: `docker save <some/image> > some-image.tar`
 
+**NOTE**: the tar file must be mounted into the container. The installation procedure specifies using `/run/docker_uploads` but another directory path may be used.
+
 ```
-raas pulp-upload <isv> some-image.tar
+raas pulp-upload <isv> /run/docker_uploads/<some-image>.tar
 ```
 
 * creates pulp repository for docker content if it doesn't exist
@@ -105,11 +115,11 @@ NOTE: Most of these steps will be automated with the introduction of the `atomic
 
 1. Pull container image. The 'latest' tag (assumed) tracks the stable release of the project.
 
-        docker pull aweiteka/raas
+        sudo docker pull aweiteka/raas
 
 1. Create directory for uploading content to pulp
 
-        mkdir /run/docker_uploads
+        sudo mkdir -p /run/docker_uploads
 
 1. Set selinux context for directories mounted into the container:
 
@@ -121,8 +131,9 @@ NOTE: Most of these steps will be automated with the introduction of the `atomic
         export RAAS_CONF_REPO=ssh://git@github.com:user/private-raas-config.git
         alias raas='sudo docker run -it --rm \
                     -e RAAS_CONF_REPO=$RAAS_CONF_REPO \
-                    -v ~/.ssh/id_rsa:/root/.ssh/id_rsa \
-                    -v ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub \
+                    -v $HOME/.ssh/id_rsa:/root/.ssh/id_rsa \
+                    -v $HOME/.ssh/known_hosts:/root/.ssh/known_hosts \
+                    -v /run/docker_uploads:/run/docker_uploads \
                     aweiteka/raas'
 
 1. Source the `.bashrc` file

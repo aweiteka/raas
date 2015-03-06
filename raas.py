@@ -1137,6 +1137,24 @@ class Configuration(object):
         return l_file
 
     @property
+    def metafile(self):
+        if not self.isv_app_name:
+            logging.error('ISV app name is required to get meta file')
+            raise ConfigurationError('ISV app name is required to get meta file')
+        m_file = os.path.join(self._metadir,
+                '-'.join([self.isv, self.isv_app_name.replace('/', '-')]) + '.json')
+        logging.debug('Using "{0}" as meta file'.format(m_file))
+        return m_file
+
+    @metafile.setter
+    def metafile(self, val):
+        if not os.path.isfile(val):
+            logging.error('File "{0}" does not exist'.format(val))
+            raise ConfigurationError('File "{0}" does not exist'.format(val))
+        logging.debug('Copying file "{0}" to config meta dir'.format(val))
+        shutil.copy(val, self._metadir)
+
+    @property
     def pulp_conf(self):
         return {'server_url'  : self._parsed_config.get('pulpserver', 'host'),
                 'username'    : self._parsed_config.get('pulpserver', 'username'),
@@ -1202,8 +1220,9 @@ class Configuration(object):
     def commit_all_changes(self):
         if self._config_repo:
             logging.info('Committing changes in config repo')
-            # TODO: add crane config file from meta dir
             files = [self._conf_file, self.logfile]
+            if self.isv_app_name and os.path.isfile(self.metafile):
+                files.append(self.metafile)
             self._config_repo.index.add(files)
             self._config_repo.index.commit('{0} {1} {2}update by raas script'\
                     .format(self.isv, self._action, self.isv_app_name + ' ' if self.isv_app_name else ''))
@@ -1457,6 +1476,7 @@ def main():
             pulp.download_repo()
             aws.upload_layers(pulp.files_for_aws(config.redhat_image_ids))
             openshift.update_app([pulp.crane_config_file])
+            config.metafile = openshift.isv_app_crane_file
             logging.info('Published "{0}" image'.format(config.isv_app_name))
             stdprint('Published "{0}" image'.format(config.isv_app_name))
             stdprint('To pull this image with docker, use:\n# docker pull {0}'.format(openshift.docker_pull_url()))
@@ -1484,11 +1504,11 @@ def main():
             logging.error('I/O error: {0}'.format(e))
             ret = 1
 
-    if not args.nocommit:
-        config.commit_all_changes()
-
     openshift.cleanup()
     pulp.cleanup()
+
+    if not args.nocommit:
+        config.commit_all_changes()
 
     sys.exit(ret)
 

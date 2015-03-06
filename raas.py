@@ -29,7 +29,7 @@ import tarfile
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from boto import connect_s3, s3
 from boto.exception import S3CreateError
-from ConfigParser import SafeConfigParser
+from ConfigParser import SafeConfigParser, NoSectionError, NoOptionError
 from datetime import date
 from git import Repo
 from git.exc import InvalidGitRepositoryError
@@ -974,6 +974,8 @@ class Configuration(object):
         self._setup_isv_config_dirs()
         self._setup_isv_config_file()
 
+        self._validate_config_file()
+
     @property
     def config_branch(self):
         return self._config_branch
@@ -1278,6 +1280,44 @@ class Configuration(object):
             if self._s3bucket_param and self.s3bucket != self._parsed_config.get(self.isv, 's3_bucket'):
                 logging.error('--s3bucket "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
                         .format(self.s3bucket, self._parsed_config.get(self.isv, 's3_bucket')))
+
+    def _validate_config_file(self):
+        try:
+            options = {'openshift' : ['server_url', 'app_git_url', 'app_git_branch', 'cartridge', 'token'],
+                       'aws'       : ['aws_url', 'aws_access_key', 'aws_secret_access_key'],
+                       'pulpserver': ['host', 'username', 'password', 'verify_ssl']}
+            for section, opts in options.iteritems():
+                for o in opts:
+                    if not self._parsed_config.get(section, o):
+                        logging.error('Empty "{0}" option in "{1}" section of config file'.format(o, section))
+                        raise ConfigurationError('Empty option in config file')
+            try:
+                self._parsed_config.getboolean('pulpserver', 'verify_ssl')
+            except ValueError as e:
+                logging.error('"verify_ssl" option in "pulpserver" section is not a boolean: {0}'.format(e))
+                raise ConfigurationError('"verify_ssl" option in "pulpserver" section is not a boolean')
+            for s in self._parsed_config.sections():
+                if s in ['openshift', 'aws', 'pulpserver']:
+                    continue
+                for o in ['openshift_domain', 'openshift_app', 'openshift_scale', 'openshift_gear_size', 's3_bucket']:
+                    if not self._parsed_config.get(s, o):
+                        logging.error('Empty "{0}" option in "{1}" section of config file'.format(o, s))
+                        raise ConfigurationError('Empty option in config file')
+                try:
+                    self._parsed_config.getboolean(s, 'openshift_scale')
+                except ValueError as e:
+                    logging.error('"openshift_scale" option in "{0}" section is not a boolean: {1}'.format(s, e))
+                    raise ConfigurationError('"openshift_scale" option in "{0}" section is not a boolean'.format(s))
+                if not self._parsed_config.get(s, 'openshift_gear_size') in ['small', 'small.highcpu', 'medium', 'large']:
+                    logging.error('"openshift_gear_size" option in "{0}" section must be one of "small", "small.highcpu", "medium", "large", not: {1}'\
+                            .format(s, self._parsed_config.get(s, 'openshift_gear_size')))
+                    raise ConfigurationError('Invalid "openshift_gear_size" option in "{0}" section'.format(s))
+        except NoSectionError as e:
+            logging.error('Required section is missing in config file: {0}'.format(e))
+            raise ConfigurationError('Missing section in config file')
+        except NoOptionError as e:
+            logging.error('Required option is missing in config file: {0}'.format(e))
+            raise ConfigurationError('Missing option in config file')
 
 
 class RaasError(Exception):

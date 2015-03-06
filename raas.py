@@ -39,6 +39,11 @@ from tempfile import mkdtemp
 from time import sleep
 
 
+def stdprint(msg, terse_msg=False):
+    if stdprint.terse == terse_msg:
+        print msg
+
+
 class PulpError(Exception):
     pass
 
@@ -178,7 +183,7 @@ class PulpServer(object):
                 raise PulpError('Pulp task "{0}" failed'.format(tid))
             else:
                 logging.debug('Waiting for pulp task "{0}" ({1}/{2} seconds passed)'.format(tid, curr, timeout))
-                print 'Waiting for pulp task... ({1}/{2} seconds passed)'.format(curr, timeout)
+                stdprint('Waiting for pulp task... ({1}/{2} seconds passed)'.format(curr, timeout))
                 sleep(poll)
                 curr += poll
         logging.error('Timed out waiting for pulp task "{0}"'.format(tid))
@@ -189,7 +194,7 @@ class PulpServer(object):
         logging.info('Checking pulp status')
         self._call_pulp('{0}/pulp/api/v2/status/'.format(self.server_url))
         logging.info('Pulp status looks OK')
-        print 'Pulp status is OK'
+        stdprint('Pulp status is OK')
 
     def verify_repo(self):
         """Verify pulp repository exists"""
@@ -197,14 +202,14 @@ class PulpServer(object):
         logging.info('Verifying pulp repository "{0}"'.format(self.repo_id))
         self._call_pulp(url)
         logging.info('Pulp repository "{0}" looks OK'.format(self.repo_id))
-        print 'Pulp repository is OK'
+        stdprint('Pulp repository is OK')
 
     def _create_repo(self):
         """Create pulp docker repository"""
         try:
             self.verify_repo()
             logging.info('Pulp repository "{0}" already exists'.format(self.repo_id))
-            print 'Pulp repository "{0}" already exists'.format(self.repo_id)
+            stdprint('Pulp repository "{0}" already exists'.format(self.repo_id))
         except PulpError:
             payload = {
                 'id': self.repo_id,
@@ -233,7 +238,7 @@ class PulpServer(object):
             logging.info('Creating pulp repository "{0}"'.format(self.repo_id))
             self._call_pulp(url, 'post', payload)
             logging.info('Created pulp repository "{0}"'.format(self.repo_id))
-            print 'Created pulp repository "{0}"'.format(self.repo_id)
+            stdprint('Created pulp repository "{0}"'.format(self.repo_id))
 
     def _update_redirect_url(self):
         """Update distributor redirect URL and export file"""
@@ -265,14 +270,14 @@ class PulpServer(object):
             logging.info('Image is already extracted in "{0}"'.format(self.data_dir))
             return
         logging.info('Extracting image "{0}" to "{1}"'.format(file_upload, self.data_dir))
-        print 'Extracting image "{0}"'.format(file_upload)
+        stdprint('Extracting image "{0}"'.format(file_upload))
         with tarfile.open(file_upload) as tar:
             tar.extractall(self.data_dir)
         logging.info('Image "{0}" extracted to "{1}"'.format(file_upload, self.data_dir))
 
     def _get_app_name_from_image(self, file_upload):
         logging.info('Getting app name from the image "{0}"'.format(file_upload))
-        print 'Getting app name from the image "{0}"'.format(file_upload)
+        stdprint('Getting app name from the image "{0}"'.format(file_upload))
         self._extract_image(file_upload)
         with open(os.path.join(self.data_dir, 'repositories')) as f:
             data = json.load(f)
@@ -282,8 +287,8 @@ class PulpServer(object):
             raise PulpError('Missing app name in the "repositories" file')
         logging.info('Got "{0}" as app name from the image "{1}"'.format(
                 self._isv_app_name, file_upload))
-        print 'Got "{0}" as app name from the image "{1}"'.format(
-                self._isv_app_name, file_upload)
+        stdprint('Got "{0}" as app name from the image "{1}"'.format(
+                self._isv_app_name, file_upload))
 
     def _get_hierarchy_from_image(self, file_upload):
         logging.info('Getting layers hierarchy from image "{0}"'.format(file_upload))
@@ -353,10 +358,11 @@ class PulpServer(object):
         self._import_upload(mask_id)
         self._delete_upload_id()
         self._publish_repo()
-        logging.info('Image "{0}" uploaded to pulp repo "{1}"'.format(
-                file_upload, self.repo_id))
-        print 'Image "{0}" uploaded to pulp repo "{1}"'.format(
-                file_upload, self.repo_id)
+        logging.info('Image "{0}" uploaded to pulp repo "{1}" with name "{2}"'.format(
+                file_upload, self.repo_id, self._isv_app_name))
+        stdprint('Image "{0}" uploaded to pulp repo "{1}" with name "{2}"'.format(
+                file_upload, self.repo_id, self._isv_app_name))
+        stdprint(self._isv_app_name, True)
 
     def _upload_bits(self, file_upload):
         logging.info('Uploading file "{0}" to pulp'.format(file_upload))
@@ -370,11 +376,11 @@ class PulpServer(object):
                     break
                 url = '{0}/pulp/api/v2/content/uploads/{1}/{2}/'.format(self.server_url, self.upload_id, offset)
                 logging.info('Uploading "{0}": {1:.1f} of {2:.1f} MB done'.format(file_upload,  offset / 1048576.0, source_file_size / 1048576.0))
-                print 'Uploading file "{0}" to pulp: {1:.1f} of {2:.1f} MB done'.format(file_upload, offset / 1048576.0, source_file_size / 1048576.0)
+                stdprint('Uploading file "{0}" to pulp: {1:.1f} of {2:.1f} MB done'.format(file_upload, offset / 1048576.0, source_file_size / 1048576.0))
                 self._call_pulp(url, 'put', data)
                 offset = min(offset + self._CHUNK_SIZE, source_file_size)
         logging.info('File "{0}" uploaded to pulp'.format(file_upload))
-        print 'File "{0}" uploaded to pulp'.format(file_upload)
+        stdprint('File "{0}" uploaded to pulp'.format(file_upload))
 
     def _import_upload(self, mask_id=None):
         """Import uploaded content"""
@@ -444,14 +450,14 @@ class PulpServer(object):
 
         url = '{0}/pulp/docker/{1}.tar'.format(self.server_url, self.repo_id)
         logging.info('Downloading exported repo "{0}"'.format(self.repo_id))
-        print 'Downloading exported repo "{0}"'.format(self.repo_id)
+        stdprint('Downloading exported repo "{0}"'.format(self.repo_id))
         r = self._call_pulp(url, 'get', return_json=False, p_stream=True)
         with open(self.exported_local_file, 'wb') as fd:
             for chunk in r.iter_content(self._CHUNK_SIZE):
                 fd.write(chunk)
         logging.info('Exported repo downloaded to "{0}"'.format(self.exported_local_file))
         logging.info('Extracting downloaded repo "{0}"'.format(self.exported_local_file))
-        print 'Extracting downloaded repo "{0}"'.format(self.exported_local_file)
+        stdprint('Extracting downloaded repo "{0}"'.format(self.exported_local_file))
         with tarfile.open(self.exported_local_file) as tar:
             tar.extractall(self.data_dir)
         logging.info('Downloaded repo extracted to "{0}"'.format(self.data_dir))
@@ -536,19 +542,19 @@ class AwsS3(object):
             logging.warn('S3 bucket "{0}" does not exist'.format(self.bucket_name))
             raise AwsError('Failed to find S3 bucket "{0}"'.format(self.bucket_name))
         logging.info('S3 bucket "{0}" looks OK'.format(self.bucket_name))
-        print 'S3 bucket "{0}" looks OK'.format(self.bucket_name)
+        stdprint('S3 bucket "{0}" looks OK'.format(self.bucket_name))
 
     def status(self):
         logging.info('Checking AWS status')
         self.bucket
         logging.info('AWS looks OK')
-        print 'AWS status is OK'
+        stdprint('AWS status is OK')
 
     def create_bucket(self):
         try:
             self.verify_bucket()
             logging.info('S3 bucket "{0}" already exists'.format(self.bucket_name))
-            print 'S3 bucket "{0}" already exists'.format(self.bucket_name)
+            stdprint('S3 bucket "{0}" already exists'.format(self.bucket_name))
         except AwsError:
             if not self._create:
                 logging.error('S3 bucket "{0}" is missing and "--create" option is not specified'.format(self.bucket_name))
@@ -557,7 +563,7 @@ class AwsS3(object):
             try:
                 self._bucket = self._conn.create_bucket(self.bucket_name)
                 logging.info('Created S3 bucket "{0}"'.format(self.bucket_name))
-                print 'Created S3 bucket "{0}"'.format(self.bucket_name)
+                stdprint('Created S3 bucket "{0}"'.format(self.bucket_name))
             except S3CreateError as e:
                 logging.error('Failed to create "{0}" S3 bucket: {1}'.format(self.bucket_name, e))
                 raise AwsError('Failed to create "{0}" S3 bucket'.format(self.bucket_name))
@@ -572,7 +578,7 @@ class AwsS3(object):
             dest = '/'.join([self._app_name, name])
             key = s3.key.Key(bucket=self.bucket, name=dest)
             logging.debug('Uploading "{0}"'.format(dest))
-            print 'Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name)
+            stdprint('Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name))
             with open(path, 'rb') as f:
                 key.set_contents_from_file(f, replace=True)
             key.set_acl('public-read')
@@ -678,10 +684,6 @@ class Openshift(object):
             self._isv_app_crane_file = filename
         return self._isv_app_crane_file
 
-    @property
-    def docker_pull_cmd(self):
-        return 'docker pull {0}{1}'.format(self.get_app_url(True), self._isv_app_name_orig)
-
     def get_app_url(self, without_proto=False):
         if without_proto:
             if self.app_data['app_url'].startswith('http://'):
@@ -689,6 +691,10 @@ class Openshift(object):
             elif self.app_data['app_url'].startswith('https://'):
                 return self.app_data['app_url'].lstrip('https://')
         return self.app_data['app_url']
+
+    def docker_pull_url(self, app_name=None):
+        return '{0}{1}'.format(self.get_app_url(True),
+                app_name if app_name else self._isv_app_name_orig)
 
     def get_list_of_isv_apps(self):
         isv_apps = []
@@ -704,7 +710,7 @@ class Openshift(object):
             with open(filename) as f:
                 data = json.load(f)
             logging.debug('Content of file "{0}":\n{1}'.format(filename, json.dumps(data, indent=2)))
-            isv_apps.append(data['repo-registry-id'])
+            isv_apps.append(self.docker_pull_url(data['repo-registry-id']))
         logging.info('ISV "{0}" has published apps: {1}'.format(self._isv, isv_apps))
         return isv_apps
 
@@ -769,7 +775,7 @@ class Openshift(object):
         r_json = self._call_openshift(url)
         self._check_status(r_json, 'ok', 'Openshift domain "{0}" does not exist'.format(self.domain), logging.WARN)
         logging.info('Openshift domain "{0}" looks OK'.format(self.domain))
-        print 'Openshift domain "{0}" looks OK'.format(self.domain)
+        stdprint('Openshift domain "{0}" looks OK'.format(self.domain))
 
     def verify_app(self):
         url = self.app_data['app_url'] + 'v1/_ping'
@@ -785,7 +791,7 @@ class Openshift(object):
             logging.debug('Openshift crane ping response is not "true" but: {0}'.format(r.text))
             raise OpenshiftError('Failed to ping openshift crane app')
         logging.info('Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url']))
-        print 'Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url'])
+        stdprint('Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url']))
 
     def status(self):
         logging.info('Checking openshift status')
@@ -795,15 +801,15 @@ class Openshift(object):
             self.isv_app_crane_file
         else:
             logging.info('Skipping ISV app crane file check as ISV app name was not specified')
-            print 'Skipping ISV app crane file check as ISV app name was not specified'
+            stdprint('Skipping ISV app crane file check as ISV app name was not specified')
         logging.info('Openshift status looks OK')
-        print 'Openshift status is OK'
+        stdprint('Openshift status is OK')
 
     def create_domain(self):
         try:
             self.verify_domain()
             logging.info('Openshift domain "{0}" already exists'.format(self.domain))
-            print 'Openshift domain "{0}" already exists'.format(self.domain)
+            stdprint('Openshift domain "{0}" already exists'.format(self.domain))
         except OpenshiftError:
             if not self._create:
                 logging.error('Openshift domain "{0}" is missing and "--create" option is not specified'.format(self.domain))
@@ -814,14 +820,14 @@ class Openshift(object):
             r_json = self._call_openshift(url, 'post', payload)
             self._check_status(r_json, 'created', 'Domain "{0}" could not be created'.format(self.domain))
             logging.info('Created openshift domain "{0}"'.format(self.domain))
-            print 'Created openshift domain "{0}"'.format(self.domain)
+            stdprint('Created openshift domain "{0}"'.format(self.domain))
 
     def create_app(self, redhat_meta=None):
         """Create an openshift application"""
         try:
             self.verify_app()
             logging.info('Openshift app "{0}" already exists'.format(self.app_name))
-            print 'Openshift app "{0}" already exists'.format(self.app_name)
+            stdprint('Openshift app "{0}" already exists'.format(self.app_name))
         except OpenshiftError:
             payload = {
                 'name'                 : self.app_name,
@@ -841,12 +847,8 @@ class Openshift(object):
             }
             url = 'broker/rest/domain/{0}/applications'.format(self.domain)
             logging.info('Creating openshift application "{0}"'.format(self.app_name))
-            if self._app_scale:
-                scalable = 'scalable '
-            else:
-                scalable = ''
-            print 'Creating {0}openshift application "{1}" (this can take a while..)'.format(
-                    scalable, self.app_name)
+            stdprint('Creating {0}openshift application "{1}" (this can take a while..)'.format(
+                    'scalable ' if self._app_scale else '', self.app_name))
             r_json = self._call_openshift(url, 'post', payload)
             self._check_status(r_json, 'created', 'Failed to create openshift app "{0}"'.format(self.app_name))
             self._app_data = r_json['data']
@@ -870,7 +872,7 @@ class Openshift(object):
 
             logging.info('Created openshift app "{0}" with ID "{1}"'\
                          .format(self.app_data['app_url'], self.app_data['id']))
-            print 'Created openshift application "{0}"'.format(self.app_name)
+            stdprint('Created openshift application "{0}"'.format(self.app_name))
 
     def update_app(self, data_files):
         """Copy all config data_files to the crane/data directory"""
@@ -878,7 +880,7 @@ class Openshift(object):
         if not data_files:
             logging.info('No configuration data supplied')
             return
-        print 'Updating openshift crane application "{0}" (this can take a while..)'.format(self.app_name)
+        stdprint('Updating openshift crane application "{0}" (this can take a while..)'.format(self.app_name))
         self.clone_app()
         dest_dir = os.path.join(self.app_local_dir, 'crane', 'data')
         files_to_add = []
@@ -891,7 +893,7 @@ class Openshift(object):
         self._app_repo.remotes.origin.push()
         self.verify_app()
         logging.info('Openshift crane app "{0}" has been updated'.format(self.app_name))
-        print 'Updated openshift crane application "{0}"'.format(self.app_name)
+        stdprint('Updated openshift crane application "{0}"'.format(self.app_name))
 
     def cleanup(self):
         if self._app_local_dir:
@@ -1285,6 +1287,8 @@ def main():
     parser.add_argument('-c', '--configenv', metavar='BRANCH', default='stage',
             choices=['dev', 'test', 'stage', 'master'],
             help='working configuration environment branch to use: "dev", "test", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
+    parser.add_argument('-t', '--terse', action='store_true',
+            help='enable terse output - print only docker pull URLs')
     subparsers = parser.add_subparsers(dest='action')
     status_parser = subparsers.add_parser('status',
             help='check configuration status')
@@ -1319,6 +1323,8 @@ def main():
     pulp_upload_parser.add_argument('file_upload', metavar='IMAGE.tar',
             help='file to upload to pulp server. Output of "docker save some/image > image.tar"')
     args = parser.parse_args()
+
+    stdprint.terse = args.terse
 
     logFormatter = logging.Formatter('%(asctime)s - {0} - %(name)s - %(levelname)s - %(message)s'.format(args.action.upper()))
     logger = logging.getLogger()
@@ -1396,21 +1402,23 @@ def main():
             if config.isv_app_name:
                 if openshift.image_ids == aws.image_ids:
                     logging.info('Openshift crane images matches AWS images')
-                    print 'Openshift crane images matches AWS images'
+                    stdprint('Openshift crane images matches AWS images')
                 else:
                     logging.error('Openshift Crane images does not match AWS images:\nCrane: {0}\nAWS: {1}'\
                             .format(openshift.image_ids, aws.image_ids))
                     raise RaasError('Openshift crane images and AWS images do not match')
             logging.info('Status of "{0}" is OK'.format(config.isv))
-            print 'Status of "{0}" is OK'.format(config.isv)
+            stdprint('Status of "{0}" is OK'.format(config.isv))
             if config.isv_app_name:
-                print 'To pull this image with docker, use:\n# {0}'.format(openshift.docker_pull_cmd)
+                stdprint('To pull this image with docker, use:\n# docker pull {0}'.format(openshift.docker_pull_url()))
+                stdprint(openshift.docker_pull_url(), True)
             else:
                 isv_apps = openshift.get_list_of_isv_apps()
                 if not isv_apps:
-                    print 'This ISV has no published docker images'
+                    stdprint('This ISV has no published docker images')
                 else:
-                    print 'This ISV has published docker images:\n - {0}'.format('\n - '.join(isv_apps))
+                    stdprint('Published docker images of this ISV:\n - {0}'.format('\n - '.join(isv_apps)))
+                    stdprint('\n'.join(isv_apps), True)
         except RaasError as e:
             logging.error('Failed to verify "{0}" status: {1}'.format(config.isv, e))
             ret = 1
@@ -1433,7 +1441,7 @@ def main():
             openshift.create_domain()
             openshift.create_app(config.redhat_meta_files)
             logging.info('ISV "{0}" was setup correctly'.format(config.isv))
-            print 'ISV "{0}" was setup correctly'.format(config.isv)
+            stdprint('ISV "{0}" was setup correctly'.format(config.isv))
         except AwsError as e:
             logging.error('Failed to create S3 bucket: {0}'.format(e))
             ret = 1
@@ -1450,8 +1458,9 @@ def main():
             aws.upload_layers(pulp.files_for_aws(config.redhat_image_ids))
             openshift.update_app([pulp.crane_config_file])
             logging.info('Published "{0}" image'.format(config.isv_app_name))
-            print 'Published "{0}" image'.format(config.isv_app_name)
-            print 'To pull this image with docker, use:\n# {0}'.format(openshift.docker_pull_cmd)
+            stdprint('Published "{0}" image'.format(config.isv_app_name))
+            stdprint('To pull this image with docker, use:\n# docker pull {0}'.format(openshift.docker_pull_url()))
+            stdprint(openshift.docker_pull_url(), True)
         except PulpError as e:
             logging.error('Failed to download repo from pulp: {0}'.format(e))
             ret = 1

@@ -685,12 +685,21 @@ class Openshift(object):
         return self._isv_app_crane_file
 
     def get_app_url(self, without_proto=False):
+        if self.app_data['aliases']:
+            url = self.app_data['aliases'][0]['id']
+        else:
+            url = self.app_data['app_url']
         if without_proto:
-            if self.app_data['app_url'].startswith('http://'):
-                return self.app_data['app_url'].lstrip('http://')
-            elif self.app_data['app_url'].startswith('https://'):
-                return self.app_data['app_url'].lstrip('https://')
-        return self.app_data['app_url']
+            if url.startswith('http://'):
+                url = url.lstrip('http://')
+            elif url.startswith('https://'):
+                url = url.lstrip('https://')
+        else:
+            if not url.startswith('http://') and not url.startswith('https://'):
+                url = 'https://' + url
+        if not url.endswith('/'):
+            url += '/'
+        return url
 
     def docker_pull_url(self, app_name=None):
         return '{0}{1}'.format(self.get_app_url(True),
@@ -778,7 +787,7 @@ class Openshift(object):
         stdprint('Openshift domain "{0}" looks OK'.format(self.domain))
 
     def verify_app(self):
-        url = self.app_data['app_url'] + 'v1/_ping'
+        url = self.get_app_url() + 'v1/_ping'
         logging.info('Verifying openshift crane app status on url "{0}"'.format(url))
         r = requests.get(url)
         logging.debug('Openshift crane app HTTP status code: {0}'.format(r.status_code))
@@ -790,8 +799,8 @@ class Openshift(object):
             logging.warn('Openshift crane ping response is not "true"')
             logging.debug('Openshift crane ping response is not "true" but: {0}'.format(r.text))
             raise OpenshiftError('Failed to ping openshift crane app')
-        logging.info('Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url']))
-        stdprint('Openshift crane app on "{0}" looks OK'.format(self.app_data['app_url']))
+        logging.info('Openshift crane app on "{0}" looks OK'.format(self.get_app_url()))
+        stdprint('Openshift crane app on "{0}" looks OK'.format(self.get_app_url()))
 
     def status(self):
         logging.info('Checking openshift status')
@@ -871,7 +880,7 @@ class Openshift(object):
                 self.verify_app()
 
             logging.info('Created openshift app "{0}" with ID "{1}"'\
-                         .format(self.app_data['app_url'], self.app_data['id']))
+                         .format(self.get_app_url(), self.app_data['id']))
             stdprint('Created openshift application "{0}"'.format(self.app_name))
 
     def update_app(self, data_files):

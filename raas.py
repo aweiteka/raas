@@ -981,9 +981,11 @@ class Configuration(object):
         logging.info('Loaded config file "{0}"'.format(self._conf_file))
 
         self._setup_isv_config_dirs()
-        self._setup_isv_config_file()
-
-        self._validate_config_file()
+        if self._action != 'pulp-upload':
+            self._setup_isv_config_file()
+            self._validate_config_file()
+        else:
+            self._validate_config_file(True)
 
     @property
     def config_branch(self):
@@ -1290,7 +1292,7 @@ class Configuration(object):
                 logging.error('--s3bucket "{0}" parameter is being ignored, current value is loaded from config file: {1}'\
                         .format(self.s3bucket, self._parsed_config.get(self.isv, 's3_bucket')))
 
-    def _validate_config_file(self):
+    def _validate_config_file(self, only_main_sections=False):
         try:
             options = {'openshift' : ['server_url', 'app_git_url', 'app_git_branch', 'cartridge', 'token'],
                        'aws'       : ['aws_url', 'aws_access_key', 'aws_secret_access_key'],
@@ -1305,6 +1307,8 @@ class Configuration(object):
             except ValueError as e:
                 logging.error('"verify_ssl" option in "pulpserver" section is not a boolean: {0}'.format(e))
                 raise ConfigurationError('"verify_ssl" option in "pulpserver" section is not a boolean')
+            if only_main_sections:
+                return
             for s in self._parsed_config.sections():
                 if s in ['openshift', 'aws', 'pulpserver']:
                     continue
@@ -1438,17 +1442,18 @@ def main():
     fileHandler.setLevel(logging.DEBUG)
     logger.addHandler(fileHandler)
 
-    try:
-        openshift = Openshift(**config.openshift_conf)
-    except OpenshiftError as e:
-        logging.critical('Failed to initialize Openshift: {0}'.format(e))
-        sys.exit(1)
-
-    try:
-        aws = AwsS3(**config.aws_conf)
-    except AwsError as e:
-        logging.critical('Failed to initialize AWS: {0}'.format(e))
-        sys.exit(1)
+    if args.action != 'pulp-upload':
+        try:
+            openshift = Openshift(**config.openshift_conf)
+        except OpenshiftError as e:
+            logging.critical('Failed to initialize Openshift: {0}'.format(e))
+            sys.exit(1)
+    
+        try:
+            aws = AwsS3(**config.aws_conf)
+        except AwsError as e:
+            logging.critical('Failed to initialize AWS: {0}'.format(e))
+            sys.exit(1)
 
     try:
         pulp = PulpServer(**config.pulp_conf)
@@ -1553,7 +1558,8 @@ def main():
             logging.error('I/O error: {0}'.format(e))
             ret = 1
 
-    openshift.cleanup()
+    if args.action != 'pulp-upload':
+        openshift.cleanup()
     pulp.cleanup()
 
     if not args.nocommit:

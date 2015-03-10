@@ -27,8 +27,9 @@ import sys
 import tarfile
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
-from boto import connect_s3, s3
+from boto import s3
 from boto.exception import S3CreateError
+from boto.s3.connection import S3Connection
 from ConfigParser import SafeConfigParser, NoSectionError, NoOptionError
 from datetime import date
 from git import Repo
@@ -59,7 +60,7 @@ class PulpServer(object):
     _CHUNK_SIZE         = 1048576 # 1 MB per upload call
 
     def __init__(self, server_url, username, password, verify_ssl, isv,
-            isv_app_name, redirect_url):
+            isv_app_name):
         self._upload_id = None
         self._repo_id = None
         self._data_dir = None
@@ -70,7 +71,6 @@ class PulpServer(object):
         self._verify_ssl = verify_ssl
         self._isv = isv
         self._isv_app_name = isv_app_name
-        self._redirect_url = redirect_url
 
     @property
     def server_url(self):
@@ -240,19 +240,19 @@ class PulpServer(object):
             logging.info('Created pulp repository "{0}"'.format(self.repo_id))
             stdprint('Created pulp repository "{0}"'.format(self.repo_id))
 
-    def _update_redirect_url(self):
+    def _update_redirect_url(self, redirect_url):
         """Update distributor redirect URL and export file"""
         url = '{0}/pulp/api/v2/repositories/{1}/'.format(self.server_url, self.repo_id)
         payload = {
             'distributor_configs': {
                 self._EXPORT_DISTRIBUTOR: {
-                    'redirect-url': self._redirect_url
+                    'redirect-url': redirect_url
                 }
             }
         }
-        logging.info('Updating pulp repository "{0}" URL to "{1}"'.format(self.repo_id, self._redirect_url))
+        logging.info('Updating pulp repository "{0}" URL to "{1}"'.format(self.repo_id, redirect_url))
         self._call_pulp(url, 'put', json.dumps(payload))
-        logging.info('Updated pulp repository "{0}" URL to "{1}"'.format(self.repo_id, self._redirect_url))
+        logging.info('Updated pulp repository "{0}" URL to "{1}"'.format(self.repo_id, redirect_url))
 
     def _delete_upload_id(self):
         """Delete upload request ID"""
@@ -442,10 +442,10 @@ class PulpServer(object):
         logging.info('Orphan "{0}" content: {1}'.format(content_type, content))
         return content
 
-    def download_repo(self):
+    def download_repo(self, redirect_url):
         self.status()
         self.verify_repo()
-        self._update_redirect_url()
+        self._update_redirect_url(redirect_url)
         self._export_repo()
 
         url = '{0}/pulp/docker/{1}.tar'.format(self.server_url, self.repo_id)
@@ -531,9 +531,25 @@ class AwsS3(object):
             logging.debug('S3 image IDs: {0}'.format(self._image_ids))
         return self._image_ids
 
+    @property
+    def app_url(self):
+        loc = self.bucket.get_location()
+        if loc:
+            loc = loc.lower()
+            logging.debug('S3 bucket location is "{0}"'.format(loc))
+        if not loc:
+            endpoint = 's3.amazonaws.com'
+        elif loc == 'eu' or loc == 'eu-west-1':
+            endpoint = 's3-eu-west-1.amazonaws.com'
+        else:
+            endpoint = 's3-{0}.amazonaws.com'.format(loc)
+        url = 'https://{0}/{1}/{2}/'.format(endpoint, self.bucket_name, self._app_name)
+        logging.info('S3 image URL is "{0}"'.format(url))
+        return url
+
     def _connect(self, aws_key, aws_secret):
         logging.info('Connecting to AWS')
-        self._conn = connect_s3(aws_access_key_id=aws_key,
+        self._conn = S3Connection(aws_access_key_id=aws_key,
                 aws_secret_access_key=aws_secret)
 
     def verify_bucket(self):
@@ -579,8 +595,7 @@ class AwsS3(object):
             key = s3.key.Key(bucket=self.bucket, name=dest)
             logging.debug('Uploading "{0}"'.format(dest))
             stdprint('Uploading "{0}" file to "{1}" S3 bucket'.format(dest, self.bucket_name))
-            with open(path, 'rb') as f:
-                key.set_contents_from_file(f, replace=True)
+            key.set_contents_from_filename(path)
             key.set_acl('public-read')
             logging.debug('Uploaded "{0}"'.format(dest))
         logging.info('All files uploaded to S3 bucket "{0}"'.format(self.bucket_name))
@@ -699,6 +714,7 @@ class Openshift(object):
                 url = 'https://' + url
         if not url.endswith('/'):
             url += '/'
+        logging.info('Openshift app URL is "{0}"'.format(url))
         return url
 
     def docker_pull_url(self, app_name=None):
@@ -1132,18 +1148,6 @@ class Configuration(object):
         logging.debug('S3 bucket name set to "{0}"'.format(self._s3bucket))
 
     @property
-    def _pulp_redirect_url(self):
-        """Returns pulp redirect URL for S3 bucket"""
-        if not self._isv_app_name:
-            logging.info('Pulp redirect URL is None')
-            return None
-        r_url = '/'.join([self._parsed_config.get('aws', 'aws_url'),
-                self._parsed_config.get(self.isv, 's3_bucket'),
-                self._isv_app_name.replace('/', '-')])
-        logging.info('Pulp redirect URL: {0}'.format(r_url))
-        return r_url
-
-    @property
     def logfile(self):
         l_file = os.path.join(self._logdir, date.today().isoformat() + '.log')
         logging.debug('Using "{0}" as log file'.format(l_file))
@@ -1174,8 +1178,7 @@ class Configuration(object):
                 'password'    : self._parsed_config.get('pulpserver', 'password'),
                 'verify_ssl'  : self._parsed_config.getboolean('pulpserver', 'verify_ssl'),
                 'isv'         : self.isv,
-                'isv_app_name': self.isv_app_name,
-                'redirect_url': self._pulp_redirect_url}
+                'isv_app_name': self.isv_app_name}
 
     @property
     def openshift_conf(self):
@@ -1295,7 +1298,7 @@ class Configuration(object):
     def _validate_config_file(self, only_main_sections=False):
         try:
             options = {'openshift' : ['server_url', 'app_git_url', 'app_git_branch', 'cartridge', 'token'],
-                       'aws'       : ['aws_url', 'aws_access_key', 'aws_secret_access_key'],
+                       'aws'       : ['aws_access_key', 'aws_secret_access_key'],
                        'pulpserver': ['host', 'username', 'password', 'verify_ssl']}
             for section, opts in options.iteritems():
                 for o in opts:
@@ -1527,7 +1530,7 @@ def main():
 
     elif args.action == 'publish':
         try:
-            pulp.download_repo()
+            pulp.download_repo(aws.app_url)
             aws.upload_layers(pulp.files_for_aws(config.redhat_image_ids))
             openshift.update_app([pulp.crane_config_file])
             config.metafile = openshift.isv_app_crane_file

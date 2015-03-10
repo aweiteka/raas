@@ -1,0 +1,9 @@
+# Place this file in your /etc/yum.repos.d/ directory
+
+# Version 2.x Production Releases
+[pulp-2-stable]
+name=Pulp 2 Production Releases
+baseurl=https://repos.fedorapeople.org/repos/pulp/pulp/stable/2/7Server/x86_64/
+enabled=1
+skip_if_unavailable=1
+gpgcheck=0

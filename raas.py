@@ -183,7 +183,7 @@ class PulpServer(object):
                 raise PulpError('Pulp task "{0}" failed'.format(tid))
             else:
                 logging.debug('Waiting for pulp task "{0}" ({1}/{2} seconds passed)'.format(tid, curr, timeout))
-                stdprint('Waiting for pulp task... ({1}/{2} seconds passed)'.format(curr, timeout))
+                stdprint('Waiting for pulp task... ({0}/{1} seconds passed)'.format(curr, timeout))
                 sleep(poll)
                 curr += poll
         logging.error('Timed out waiting for pulp task "{0}"'.format(tid))

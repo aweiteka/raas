@@ -33,3 +33,8 @@ Run `raas` from a configuration directory with `raas.cfg` file. NOTE: a director
 
 1. Set environment variable of read+write private repository, for example `export RAAS_CONF_REPO="git@github.com:user/private-raas-config.git"`
 
+## Release process
+
+1. bump VERSION file
+1. create new tagged release from master
+

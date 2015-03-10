@@ -28,7 +28,7 @@ import tarfile
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from boto import s3
-from boto.exception import S3CreateError
+from boto.exception import S3CreateError, S3ResponseError
 from boto.s3.connection import S3Connection
 from ConfigParser import SafeConfigParser, NoSectionError, NoOptionError
 from datetime import date
@@ -533,7 +533,10 @@ class AwsS3(object):
 
     @property
     def app_url(self):
-        loc = self.bucket.get_location()
+        try:
+            loc = self.bucket.get_location()
+        except S3ResponseError:
+            loc = None
         if loc:
             loc = loc.lower()
             logging.debug('S3 bucket location is "{0}"'.format(loc))

@@ -91,21 +91,26 @@ The container packaging of this tool has additional troubleshooting tools instal
 
 1. `[sudo] docker pull aweiteka/raas`
 1. See below for docker run command.
+1. Enter the container interactively and initialize the tools:
+
+        # init <environment>
+
 1. Use the command-line tools to inspect the system.
     * Run diagnostics: `raas --log DEBUG status ...`
     * List AWS S3 resources: `aws s3 ls s3://mybucket --recursive...`
+    * Inspect the pulp sever: `pulp docker repo list`
     * Run OpenShift CLI: `rhc ...`
-    * Inspect configuration repo: `git clone ...`
+    * Inspect configuration repo: `cd /tmp/isv-cert-raas` and look around
 
 ## Installation
 The raas tool is intended to be run as a container. State is maintained by the configuration repository. In this way multiple users, including automated processes, can use raas to manage and troubleshoot the registry without workstation dependencies.
 
-The container provides `raas`, `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` to add your username for the `rhc` client to work.
+The container provides `raas`, `pulp`, `aws`, `rhc` and `git` tools. You may need to edit `~/.openshift.express.conf` to add your username for the `rhc` client to work.
 
 ### Requirements
 
 * docker 1.4 or greater
-* Private repository of below credentials and other configuration
+* Private git repository of below credentials and other configuration
   * AWS S3 account token
   * OpenShift account token
   * Credentials for Pulp server running version 2.5 or greater

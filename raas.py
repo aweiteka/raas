@@ -28,12 +28,12 @@ import tarfile
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from boto import s3
-from boto.exception import S3CreateError
+from boto.exception import S3CreateError, S3ResponseError
 from boto.s3.connection import S3Connection
 from ConfigParser import SafeConfigParser, NoSectionError, NoOptionError
 from datetime import date
 from git import Repo
-from git.exc import InvalidGitRepositoryError
+from git.exc import InvalidGitRepositoryError, GitCommandError
 from glob import glob
 from simplejson.scanner import JSONDecodeError
 from tempfile import mkdtemp
@@ -486,7 +486,10 @@ class PulpServer(object):
     def cleanup(self):
         if self._data_dir:
             logging.info('Removing pulp data dir "{0}"'.format(self._data_dir))
-            shutil.rmtree(self._data_dir)
+            try:
+                shutil.rmtree(self._data_dir)
+            except OSError as e:
+                logging.debug('Failed to remove pulp temp dir: {0}'.format(e))
             self._data_dir = None
 
 
@@ -533,7 +536,10 @@ class AwsS3(object):
 
     @property
     def app_url(self):
-        loc = self.bucket.get_location()
+        try:
+            loc = self.bucket.get_location()
+        except S3ResponseError:
+            loc = None
         if loc:
             loc = loc.lower()
             logging.debug('S3 bucket location is "{0}"'.format(loc))
@@ -790,8 +796,12 @@ class Openshift(object):
     def clone_app(self):
         if not self._app_repo:
             logging.info('Clonning openshift application "{0}" to "{1}"'.format(self.app_name, self.app_local_dir))
-            self._app_repo = Repo.clone_from(self.app_data['git_url'],
-                    self.app_local_dir, branch=self._app_git_branch)
+            try:
+                self._app_repo = Repo.clone_from(self.app_data['git_url'],
+                        self.app_local_dir, branch=self._app_git_branch)
+            except GitCommandError as e:
+                logging.error('Failed to clone openshift application: {0}'.format(e))
+                raise OpenshiftError('Failed to clone openshift application')
 
     def verify_domain(self):
         """Verify that Openshift domain exists"""
@@ -923,7 +933,10 @@ class Openshift(object):
     def cleanup(self):
         if self._app_local_dir:
             logging.info('Removing local openshift app dir "{0}"'.format(self._app_local_dir))
-            shutil.rmtree(self._app_local_dir)
+            try:
+                shutil.rmtree(self._app_local_dir)
+            except OSError as e:
+                logging.debug('Failed to remove openshift temp dir: {0}'.format(e))
             self._app_local_dir = None
 
 

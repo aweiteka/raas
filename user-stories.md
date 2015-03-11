@@ -16,4 +16,5 @@
 1. I want a service that automatically scales based on load.
 1. If something goes wrong I want access to useful troubleshooting information to resolve issues quickly.
 1. I want to host my own bits. I do not want to host third-party bits.
+1. I want to enable "image federation": prevent the uploading of some layers but reference them in metadata.
 1. I want to take advantage of well-known, well-supported cloud services that "just work".

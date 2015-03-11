@@ -517,9 +517,12 @@ class AwsS3(object):
     @property
     def bucket(self):
         if not self._bucket:
-            self.verify_bucket()
             logging.info('Getting S3 bucket "{0}"'.format(self.bucket_name))
-            self._bucket = self._conn.get_bucket(self.bucket_name)
+            try:
+                self._bucket = self._conn.get_bucket(self.bucket_name)
+            except S3ResponseError as e:
+                logging.warn('Failed to get S3 bucket "{0}": {1}'.format(self.bucket_name, e))
+                raise AwsError('Failed to get S3 bucket "{0}": {1}'.format(self.bucket_name, e))
         return self._bucket
 
     @property
@@ -560,15 +563,13 @@ class AwsS3(object):
 
     def verify_bucket(self):
         logging.info('Looking up S3 bucket "{0}"'.format(self.bucket_name))
-        if not self._conn.lookup(self.bucket_name):
-            logging.warn('S3 bucket "{0}" does not exist'.format(self.bucket_name))
-            raise AwsError('Failed to find S3 bucket "{0}"'.format(self.bucket_name))
+        self.bucket
         logging.info('S3 bucket "{0}" looks OK'.format(self.bucket_name))
         stdprint('S3 bucket "{0}" looks OK'.format(self.bucket_name))
 
     def status(self):
         logging.info('Checking AWS status')
-        self.bucket
+        self.verify_bucket()
         logging.info('AWS looks OK')
         stdprint('AWS status is OK')
 
@@ -586,6 +587,9 @@ class AwsS3(object):
                 self._bucket = self._conn.create_bucket(self.bucket_name)
                 logging.info('Created S3 bucket "{0}"'.format(self.bucket_name))
                 stdprint('Created S3 bucket "{0}"'.format(self.bucket_name))
+            except S3ResponseError as e:
+                logging.error('Failed to create "{0}" S3 bucket: {1}'.format(self.bucket_name, e))
+                raise AwsError('Failed to create "{0}" S3 bucket'.format(self.bucket_name))
             except S3CreateError as e:
                 logging.error('Failed to create "{0}" S3 bucket: {1}'.format(self.bucket_name, e))
                 raise AwsError('Failed to create "{0}" S3 bucket'.format(self.bucket_name))
@@ -768,11 +772,21 @@ class Openshift(object):
 
         logging.debug('Openshift HTTP status code: {0}'.format(r.status_code))
 
+        # Openshift HTTP status codes without json response
+        if r.status_code == 401:
+            logging.error('Received 401 HTTP status code from openshift: ' + \
+                    'Unauthorized - Authentication has failed')
+            raise OpenshiftError('Openshift authentication failed')
+        elif r.status_code == 504:
+            logging.error('Received 504 HTTP status code from openshift: ' + \
+                    'Gateway Timeout - The server was acting as a gateway or proxy and did not receive a timely response.')
+            raise OpenshiftError('Openshift gateway timeout')
+
         try:
             r_json = r.json()
         except JSONDecodeError as e:
             logging.error('Failed to parse openshift response: {0}'.format(e))
-            raise OpenshiftError('Failed to parse openshift response: {0}'.format(e))
+            raise OpenshiftError('Failed to parse openshift response')
         logging.debug('Openshift JSON response:\n{0}'.format(json.dumps(r_json, indent=2)))
 
         if r_json['messages']:
@@ -1464,7 +1478,7 @@ def main():
         except OpenshiftError as e:
             logging.critical('Failed to initialize Openshift: {0}'.format(e))
             sys.exit(1)
-    
+
         try:
             aws = AwsS3(**config.aws_conf)
         except AwsError as e:
@@ -1532,7 +1546,7 @@ def main():
             logging.info('ISV "{0}" was setup correctly'.format(config.isv))
             stdprint('ISV "{0}" was setup correctly'.format(config.isv))
         except AwsError as e:
-            logging.error('Failed to create S3 bucket: {0}'.format(e))
+            logging.error('Failed to setup S3 bucket: {0}'.format(e))
             ret = 1
         except OpenshiftError as e:
             logging.error('Failed to setup openshift: {0}'.format(e))
@@ -1543,6 +1557,9 @@ def main():
 
     elif args.action == 'publish':
         try:
+            openshift.verify_domain()
+            openshift.verify_app()
+            openshift.clone_app()
             pulp.download_repo(aws.app_url)
             aws.upload_layers(pulp.files_for_aws(config.redhat_image_ids))
             openshift.update_app([pulp.crane_config_file])

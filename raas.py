@@ -886,7 +886,7 @@ class Openshift(object):
                 'gear_size'            : self._gear_size,
                 'environment_variables': [{
                     'name' : 'OPENSHIFT_PYTHON_WSGI_APPLICATION',
-                    'value': 'crane/wsgi.py',
+                    'value': 'deployment/crane.wsgi',
                 }, {
                     'name' : 'OPENSHIFT_PYTHON_DOCUMENT_ROOT',
                     'value': 'crane/',

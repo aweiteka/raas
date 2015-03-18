@@ -1,9 +1,10 @@
 #!/bin/bash
 
-if [ -z "$1" ]
+if [[ -z "$1" || "$1" == "-h" || "$1" == "--help" ]]
   then
-    echo "Provide an environment to initialize: dev, test, stage, master"
-    exit 1
+    echo "USAGE: `basename $0` <environment> ['optional command to execute then exit']"
+    echo "You must specify which <environment> to initialize: dev, test, stage, master"
+    exit
 fi
 
 ENV=$1
@@ -27,10 +28,17 @@ host = $(awk '/host/ {print $3}' $TMPCFG/raas.cfg)
 verify_ssl = $(awk '/verify_ssl/ {print $3}' $TMPCFG/raas.cfg)
 EOF
 
-echo "alias pulp=\"pulp-admin -u $(awk '/username/ {print $3}' $TMPCFG/raas.cfg) -p $(awk '/password/ {print $3}' $TMPCFG/raas.cfg)\"" >> /root/.bashrc
+$PULP_ALIAS="pulp-admin -u $(awk '/username/ {print $3}' $TMPCFG/raas.cfg) -p $(awk '/password/ {print $3}' $TMPCFG/raas.cfg)\""
+echo "$PULP_ALIAS" >> /root/.bashrc
 
 echo "Commands initialized for $1 environment: pulp, aws, rhc, git"
 
 source /root/.bashrc
 
-/usr/bin/bash
+if [ -n "$2" ]
+  then
+    $2
+    exit
+  else
+    /usr/bin/bash
+fi

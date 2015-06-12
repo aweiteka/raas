@@ -1387,7 +1387,6 @@ def main():
             choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
             help='desired log level one of "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL". Default is "ERROR"')
     parser.add_argument('-c', '--configenv', metavar='BRANCH', default='stage',
-            choices=['dev', 'test', 'stage', 'master'],
             help='working configuration environment branch to use: "dev", "test", "stage", "master" (production). Matches configuration repo branch. Default is "stage"')
     parser.add_argument('-t', '--terse', action='store_true',
             help='enable terse output - print only docker pull URLs')

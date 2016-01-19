@@ -1165,8 +1165,8 @@ class Configuration(object):
             if not re.match('^[a-z0-9-_.]+$', val):
                 logging.error('S3 bucket name "{0}" must contain only [a-z0-9-_.] characters'.format(val))
                 raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
-            if len(val) > 32:
-                logging.error('S3 bucket name "{0}" must not be longer than 32 characters'.format(val))
+            if len(val) > 63:
+                logging.error('S3 bucket name "{0}" must not be longer than 63 characters'.format(val))
                 raise ValueError('Invalid S3 bucket name "{0}"'.format(val))
             self._s3bucket = val
             self._s3bucket_param = True

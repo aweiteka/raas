@@ -755,15 +755,18 @@ class Openshift(object):
             url = '{0}/{1}'.format(self._server_url, url)
         if req_type == 'get':
             logging.info('Calling openshift URL "{0}"'.format(url))
+            headers['Accept'] = 'application/json'
             r = requests.get(url, headers=headers)
         elif req_type == 'post':
             logging.info('Posting to openshift URL "{0}"'.format(url))
             logging.debug('Posting data: {0}'.format(json.dumps(payload, indent=2)))
+            headers['Accept'] = 'application/json'
             headers['content-type'] = 'application/json'
             r = requests.post(url, headers=headers, data=json.dumps(payload))
         elif req_type == 'put':
             logging.info('Putting to openshift URL "{0}"'.format(url))
             logging.debug('Putting data: {0}'.format(json.dumps(payload, indent=2)))
+            headers['Accept'] = 'application/json'
             headers['content-type'] = 'application/json'
             r = requests.put(url, headers=headers, data=json.dumps(payload))
         else:

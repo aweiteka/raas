@@ -1,7 +1,7 @@
 FROM centos:7.0.1406
 MAINTAINER Aaron Weitekamp <aweiteka@redhat.com>
 
-RUN yum install -y http://dl.fedoraproject.org/pub/epel/7/x86_64/e/epel-release-7-5.noarch.rpm
+RUN yum install -y http://dl.fedoraproject.org/pub/epel/7/x86_64/e/epel-release-7-6.noarch.rpm
 RUN yum install -y git python-pip ruby rubygems
 
 ADD express.conf /root/.openshift/express.conf
